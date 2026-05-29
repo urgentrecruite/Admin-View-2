@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Urgent Recruite Admin</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar" aria-label="Admin navigation">
+        <div class="brand">
+          <div class="brand-mark">UR</div>
+          <div>
+            <strong>Urgent Recruite</strong>
+            <span>Admin prototype</span>
+          </div>
+        </div>
+
+        <nav class="nav-list">
+          <button class="nav-item active" data-section="dashboard">Dashboard</button>
+          <button class="nav-item" data-section="requests">Requests</button>
+          <button class="nav-item" data-section="profiles">Profiles</button>
+          <button class="nav-item" data-section="shortlists">Shortlists</button>
+          <button class="nav-item" data-section="preview">Client view</button>
+        </nav>
+
+        <div class="sidebar-note">
+          <span>Current rule</span>
+          Contact details stay internal until admin approves an introduction.
+        </div>
+      </aside>
+
+      <main class="main">
+        <header class="topbar">
+          <div>
+            <p class="eyebrow">Recruitment operations</p>
+            <h1 id="page-title">Admin dashboard</h1>
+          </div>
+          <div class="topbar-actions">
+            <button class="ghost-button" id="copy-link">Copy client link</button>
+            <button class="primary-button" id="open-builder">Build shortlist</button>
+          </div>
+        </header>
+
+        <section class="section active" id="dashboard">
+          <div class="metric-grid">
+            <article class="metric">
+              <span>Open requests</span>
+              <strong id="metric-requests">0</strong>
+            </article>
+            <article class="metric">
+              <span>Profiles in bucket</span>
+              <strong id="metric-profiles">0</strong>
+            </article>
+            <article class="metric">
+              <span>Shortlists shared</span>
+              <strong id="metric-shortlists">0</strong>
+            </article>
+            <article class="metric">
+              <span>Client views</span>
+              <strong>18</strong>
+            </article>
+          </div>
+
+          <div class="dashboard-grid">
+            <section class="panel">
+              <div class="panel-header">
+                <div>
+                  <p class="eyebrow">Pipeline</p>
+                  <h2>Shortlist requests</h2>
+                </div>
+              </div>
+              <div class="request-list" id="dashboard-requests"></div>
+            </section>
+
+            <section class="panel">
+              <div class="panel-header">
+                <div>
+                  <p class="eyebrow">Shared link</p>
+                  <h2>Acme Healthcare shortlist</h2>
+                </div>
+                <span class="status-pill live">Live</span>
+              </div>
+              <div class="share-box">
+                <label for="share-url">Generated client URL</label>
+                <div class="share-row">
+                  <input id="share-url" readonly value="">
+                  <button class="icon-button" id="share-copy" title="Copy generated link">Copy</button>
+                </div>
+                <p>The client page shows candidate summaries, skills, experience, and availability. It does not send email, phone, LinkedIn, or internal notes to the browser.</p>
+              </div>
+            </section>
+          </div>
+        </section>
+
+        <section class="section" id="requests">
+          <div class="panel">
+            <div class="panel-header">
+              <div>
+                <p class="eyebrow">Organizations</p>
+                <h2>Shortlist requests</h2>
+              </div>
+              <button class="primary-button small" id="new-request">New request</button>
+            </div>
+            <div class="table" id="requests-table"></div>
+          </div>
+        </section>
+
+        <section class="section" id="profiles">
+          <div class="split-layout">
+            <section class="panel">
+              <div class="panel-header">
+                <div>
+                  <p class="eyebrow">Profile bucket</p>
+                  <h2>Candidate library</h2>
+                </div>
+              </div>
+              <div class="profile-list" id="profile-list"></div>
+            </section>
+
+            <section class="panel">
+              <div class="panel-header">
+                <div>
+                  <p class="eyebrow">Upload</p>
+                  <h2>Add profile</h2>
+                </div>
+              </div>
+              <form class="profile-form" id="profile-form">
+                <label>Name<input name="name" required placeholder="e.g. Ada Mensah"></label>
+                <label>Role<input name="role" required placeholder="e.g. HR Business Partner"></label>
+                <label>Location<input name="location" required placeholder="e.g. Accra, Ghana"></label>
+                <label>Years experience<input name="experience" required placeholder="e.g. 8 years"></label>
+                <label>Skills<textarea name="skills" required placeholder="Recruitment, HRIS, onboarding"></textarea></label>
+                <label>Contact details<input name="contact" required placeholder="email / phone / LinkedIn"></label>
+                <label>Internal notes<textarea name="notes" placeholder="Only visible to admin"></textarea></label>
+                <button class="primary-button" type="submit">Add to bucket</button>
+              </form>
+            </section>
+          </div>
+        </section>
+
+        <section class="section" id="shortlists">
+          <div class="split-layout">
+            <section class="panel">
+              <div class="panel-header">
+                <div>
+                  <p class="eyebrow">Builder</p>
+                  <h2>Create shortlist</h2>
+                </div>
+              </div>
+              <div class="builder-controls">
+                <label>Organization
+                  <select id="organization-select"></select>
+                </label>
+                <label>Shortlist title
+                  <input id="shortlist-title" value="Operations Manager shortlist">
+                </label>
+              </div>
+              <div class="selectable-list" id="selectable-profiles"></div>
+              <button class="primary-button" id="generate-shortlist">Generate secure link</button>
+            </section>
+
+            <section class="panel">
+              <div class="panel-header">
+                <div>
+                  <p class="eyebrow">Selected</p>
+                  <h2>Profiles to share</h2>
+                </div>
+              </div>
+              <div class="shortlist-output" id="shortlist-output"></div>
+            </section>
+          </div>
+        </section>
+
+        <section class="section" id="preview">
+          <div class="client-preview">
+            <div class="client-hero">
+              <div>
+                <p class="eyebrow">Private shortlist</p>
+                <h2 id="client-title">Acme Healthcare shortlist</h2>
+                <p id="client-summary">Profiles shared for review. Contact details are hidden until an introduction is approved.</p>
+              </div>
+              <span class="status-pill">Redacted view</span>
+            </div>
+            <div class="client-profile-grid" id="client-profiles"></div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    <script src="app.js"></script>
+  </body>
+</html>

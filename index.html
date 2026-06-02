@@ -61,8 +61,8 @@
               <strong id="metric-shortlists">0</strong>
             </article>
             <article class="metric">
-              <span>Client views</span>
-              <strong>18</strong>
+              <span>Intern submissions</span>
+              <strong id="metric-intents">0</strong>
             </article>
           </div>
 
@@ -118,6 +118,11 @@
                   <p class="eyebrow">Profile bucket</p>
                   <h2>Candidate library</h2>
                 </div>
+                <div class="panel-actions">
+                  <button class="ghost-button small" id="upload-profiles" type="button">Upload</button>
+                  <button class="primary-button small" id="download-profiles" type="button">Download</button>
+                  <input id="profile-upload-input" type="file" accept="application/json,.json" hidden>
+                </div>
               </div>
               <div class="profile-list" id="profile-list"></div>
             </section>
@@ -125,20 +130,23 @@
             <section class="panel">
               <div class="panel-header">
                 <div>
-                  <p class="eyebrow">Upload</p>
-                  <h2>Add profile</h2>
+                  <p class="eyebrow">Review</p>
+                  <h2>Filter and inspect</h2>
                 </div>
               </div>
-              <form class="profile-form" id="profile-form">
-                <label>Name<input name="name" required placeholder="e.g. Ada Mensah"></label>
-                <label>Role<input name="role" required placeholder="e.g. HR Business Partner"></label>
-                <label>Location<input name="location" required placeholder="e.g. Accra, Ghana"></label>
-                <label>Years experience<input name="experience" required placeholder="e.g. 8 years"></label>
-                <label>Skills<textarea name="skills" required placeholder="Recruitment, HRIS, onboarding"></textarea></label>
-                <label>Contact details<input name="contact" required placeholder="email / phone / LinkedIn"></label>
-                <label>Internal notes<textarea name="notes" placeholder="Only visible to admin"></textarea></label>
-                <button class="primary-button" type="submit">Add to bucket</button>
+              <form class="profile-form" id="profile-filters">
+                <label>Name<input id="filter-name" placeholder="Search candidate name"></label>
+                <label>Location<input id="filter-location" placeholder="e.g. London, Accra"></label>
+                <label>Years experience<input id="filter-experience" placeholder="e.g. 7, 8 years"></label>
+                <label>Keyword summary<textarea id="filter-keyword" placeholder="Search skills, role, notes, or profile summary"></textarea></label>
+                <button class="ghost-button" type="button" id="clear-filters">Clear filters</button>
               </form>
+
+              <div class="profile-summary" id="profile-summary">
+                <p class="eyebrow">Selected profile</p>
+                <h3>No profile selected</h3>
+                <p class="meta">Click Open on any profile to see the admin summary here.</p>
+              </div>
             </section>
           </div>
         </section>

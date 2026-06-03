@@ -4,24 +4,42 @@ const requests = [
     organization: "Acme Healthcare",
     contact: "Nadia Brooks",
     role: "Operations Manager",
-    status: "Ready to share",
-    requested: "May 28, 2026"
+    requested: "May 28, 2026",
+    annualGrossPay: 85000,
+    viewed: true,
+    intakeComplete: true,
+    pushedProfileIds: [101, 102, 103],
+    linkSharedCount: 0,
+    clientResponse: null,
+    paymentStatus: "unpaid"
   },
   {
     id: 2,
     organization: "Northline Logistics",
     contact: "Samuel Okoro",
     role: "Fleet HR Coordinator",
-    status: "Sourcing",
-    requested: "May 27, 2026"
+    requested: "May 27, 2026",
+    annualGrossPay: 62000,
+    viewed: true,
+    intakeComplete: true,
+    pushedProfileIds: [102],
+    linkSharedCount: 0,
+    clientResponse: null,
+    paymentStatus: "unpaid"
   },
   {
     id: 3,
     organization: "BrightPath Schools",
     contact: "Elena Walsh",
     role: "Talent Acquisition Lead",
-    status: "Awaiting intake",
-    requested: "May 25, 2026"
+    requested: "May 25, 2026",
+    annualGrossPay: 54000,
+    viewed: false,
+    intakeComplete: false,
+    pushedProfileIds: [],
+    linkSharedCount: 0,
+    clientResponse: null,
+    paymentStatus: "unpaid"
   }
 ];
 
@@ -84,9 +102,14 @@ let selectedProfileIds = [101, 102];
 let activeProfileId = 101;
 let currentShortlist = {
   token: "sl-acme-7f42",
+  requestId: 1,
   organization: "Acme Healthcare",
   title: "Operations Manager shortlist",
-  profileIds: selectedProfileIds
+  annualGrossPay: 85000,
+  profileIds: selectedProfileIds,
+  clientSelectedProfileIds: [],
+  paymentComplete: false,
+  redactedProfiles: []
 };
 
 const pageTitle = document.querySelector("#page-title");
@@ -94,6 +117,8 @@ const sections = document.querySelectorAll(".section");
 const navItems = document.querySelectorAll(".nav-item");
 const toast = document.querySelector("#toast");
 const shareUrl = document.querySelector("#share-url");
+const topbarActions = document.querySelectorAll(".topbar-action");
+const clientPaymentButton = document.querySelector("#client-payment-button");
 
 const titles = {
   dashboard: "Admin dashboard",
@@ -109,13 +134,41 @@ function showToast(message) {
   window.setTimeout(() => toast.classList.remove("show"), 2200);
 }
 
+function parseMoney(value) {
+  const amount = Number(String(value || "").replace(/[^0-9.-]/g, ""));
+  return Number.isFinite(amount) ? amount : 0;
+}
+
+function formatMoney(amount) {
+  const value = Number(amount) || 0;
+  if (!value) return "Not provided";
+
+  return new Intl.NumberFormat("en-US", {
+    maximumFractionDigits: 0
+  }).format(value);
+}
+
+function getRelatedRequestForShortlist() {
+  return requests.find((request) => String(request.id) === String(currentShortlist.requestId))
+    || requests.find((request) => request.organization === currentShortlist.organization)
+    || null;
+}
+
+function getGrossPayBasis() {
+  const relatedRequest = getRelatedRequestForShortlist();
+  return Number(currentShortlist.annualGrossPay || relatedRequest?.annualGrossPay || 0);
+}
+
 function redactProfile(profile) {
   return {
+    id: profile.id,
     name: profile.name,
     role: profile.role,
     location: profile.location,
     experience: profile.experience,
-    skills: profile.skills
+    skills: profile.skills,
+    summary: profile.summary || "Relevant experience summary is being prepared.",
+    notes: "Contact details are hidden until payment is confirmed."
   };
 }
 
@@ -130,7 +183,7 @@ function getDuplicateIds() {
   const duplicateIds = new Set();
 
   profiles.forEach((profile) => {
-    const key = `${profile.name.toLowerCase()}|${profile.contact.toLowerCase()}`;
+    const key = `${String(profile.name || "").toLowerCase()}|${String(profile.contact || "").toLowerCase()}`;
     if (seen.has(key)) {
       duplicateIds.add(profile.id);
       duplicateIds.add(seen.get(key));
@@ -142,8 +195,36 @@ function getDuplicateIds() {
   return duplicateIds;
 }
 
+function getRequestActivity(request) {
+  return {
+    pushedProfiles: request.pushedProfileIds?.length || 0,
+    sharedLinks: request.linkSharedCount || 0,
+    viewed: Boolean(request.viewed),
+    intakeComplete: Boolean(request.intakeComplete),
+    clientResponse: request.clientResponse || null,
+    paymentStatus: request.paymentStatus || "unpaid"
+  };
+}
+
+function getRequestStatus(request) {
+  const activity = getRequestActivity(request);
+
+  if (!activity.viewed) return "Not viewed yet";
+  if (activity.paymentStatus === "paid") return "Payment received";
+  if (activity.clientResponse === "responded") return "Client responded";
+  if (activity.sharedLinks > 0) return "Shortlist sent";
+  if (activity.pushedProfiles >= 3) return "Ready to share";
+  if (activity.pushedProfiles > 0 || activity.intakeComplete) return "Sourcing";
+  return "Awaiting intake";
+}
+
+function getRequestActivityText(request) {
+  const activity = getRequestActivity(request);
+  return `${activity.pushedProfiles} profiles pushed / ${activity.sharedLinks} links shared`;
+}
+
 function getOpenRequests() {
-  return requests.filter((request) => !["closed", "completed", "archived"].includes(String(request.status).toLowerCase()));
+  return requests.filter((request) => !["closed", "completed", "archived"].includes(String(request.workflowState || "").toLowerCase()));
 }
 
 function profileMatchesFilters(profile) {
@@ -202,14 +283,79 @@ function loadFrontendSubmissions() {
       organization: submission.companyName || "Unnamed organization",
       contact: submission.contactName || submission.workEmail || "No contact provided",
       role: submission.jobTitle || "Shortlist request",
-      status: "New from landing page",
-      requested: submission.submittedAt ? new Date(submission.submittedAt).toLocaleDateString() : "Frontend submission"
+      requested: submission.submittedAt ? new Date(submission.submittedAt).toLocaleDateString() : "Frontend submission",
+      annualGrossPay: parseMoney(submission.annualPay),
+      jobDescription: submission.jobDescription || "",
+      jobSpecification: submission.jobSpecification || "",
+      generatedBrief: submission.generatedBrief || "",
+      jobDocument: submission.jobDocument || "",
+      viewed: false,
+      intakeComplete: false,
+      pushedProfileIds: [],
+      linkSharedCount: 0,
+      clientResponse: null,
+      paymentStatus: "unpaid"
     });
   });
 }
 
+function encodeSharePayload(payload) {
+  const json = JSON.stringify(payload);
+  const bytes = new TextEncoder().encode(json);
+  let binary = "";
+  bytes.forEach((byte) => {
+    binary += String.fromCharCode(byte);
+  });
+  return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
+}
+
+function decodeSharePayload(value) {
+  const base64 = String(value || "").replaceAll("-", "+").replaceAll("_", "/");
+  const padded = base64.padEnd(Math.ceil(base64.length / 4) * 4, "=");
+  const binary = atob(padded);
+  const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+  return JSON.parse(new TextDecoder().decode(bytes));
+}
+
+function getClientVisibleProfiles() {
+  if (currentShortlist.redactedProfiles?.length) {
+    return currentShortlist.redactedProfiles;
+  }
+
+  return getShortlistProfiles().map(redactProfile);
+}
+
+function buildSharePayload() {
+  const relatedRequest = getRelatedRequestForShortlist();
+  const redactedProfiles = getShortlistProfiles().map(redactProfile);
+
+  return {
+    token: currentShortlist.token,
+    requestId: currentShortlist.requestId || relatedRequest?.id || "",
+    organization: currentShortlist.organization,
+    title: currentShortlist.title,
+    annualGrossPay: getGrossPayBasis(),
+    feeRate: 0.005,
+    profiles: redactedProfiles
+  };
+}
+
+function storeSharedShortlist(payload = buildSharePayload()) {
+  const stored = JSON.parse(localStorage.getItem("urgentRecruiteSharedShortlists") || "{}");
+  stored[payload.token] = payload;
+  localStorage.setItem("urgentRecruiteSharedShortlists", JSON.stringify(stored));
+  return payload;
+}
+
+function getStoredShortlist(token) {
+  const stored = JSON.parse(localStorage.getItem("urgentRecruiteSharedShortlists") || "{}");
+  return stored[token] || null;
+}
+
 function buildShareUrl() {
-  return `${window.location.href.split("#")[0]}#shortlist=${currentShortlist.token}`;
+  const payload = buildSharePayload();
+  const encoded = encodeSharePayload(payload);
+  return `${window.location.href.split("#")[0]}#shortlist=${encodeURIComponent(payload.token)}&payload=${encoded}`;
 }
 
 function escapeHtml(value) {
@@ -234,13 +380,16 @@ async function copyText(text, successMessage) {
 function setSection(sectionId) {
   sections.forEach((section) => section.classList.toggle("active", section.id === sectionId));
   navItems.forEach((item) => item.classList.toggle("active", item.dataset.section === sectionId));
+  topbarActions.forEach((action) => {
+    action.hidden = action.dataset.visibleSection !== sectionId;
+  });
   pageTitle.textContent = titles[sectionId];
 }
 
 function renderMetrics() {
-  document.querySelector("#metric-requests").textContent = requests.length;
+  document.querySelector("#metric-requests").textContent = getOpenRequests().length;
   document.querySelector("#metric-profiles").textContent = profiles.length;
-  document.querySelector("#metric-shortlists").textContent = "1";
+  document.querySelector("#metric-shortlists").textContent = requests.reduce((total, request) => total + (request.linkSharedCount || 0), 0);
   document.querySelector("#metric-intents").textContent = profiles.filter((profile) => profile.source === "intent").length;
   shareUrl.value = buildShareUrl();
 }
@@ -253,9 +402,9 @@ function renderRequests() {
     <article class="request-card">
       <div>
         <h3>${escapeHtml(request.organization)}</h3>
-        <div class="meta">${escapeHtml(request.role)} / ${escapeHtml(request.contact)}<br>Requested ${escapeHtml(request.requested)}</div>
+        <div class="meta">${escapeHtml(request.role)} / ${escapeHtml(request.contact)}<br>Requested ${escapeHtml(request.requested)}<br>${escapeHtml(getRequestActivityText(request))}</div>
       </div>
-      <span class="status-pill">${escapeHtml(request.status)}</span>
+      <span class="status-pill">${escapeHtml(getRequestStatus(request))}</span>
     </article>
   `).join("");
 
@@ -263,10 +412,38 @@ function renderRequests() {
     <article class="table-row">
       <strong>${escapeHtml(request.organization)}</strong>
       <span>${escapeHtml(request.role)}</span>
-      <span class="meta">${escapeHtml(request.contact)}</span>
-      <span class="status-pill">${escapeHtml(request.status)}</span>
+      <span class="meta">${escapeHtml(request.contact)}<br>${escapeHtml(getRequestActivityText(request))}</span>
+      <span class="status-pill">${escapeHtml(getRequestStatus(request))}</span>
     </article>
   `).join("");
+}
+
+function renderStatusSummary() {
+  const summary = document.querySelector("#status-summary");
+  const statusCounts = requests.reduce((counts, request) => {
+    const status = getRequestStatus(request);
+    counts[status] = (counts[status] || 0) + 1;
+    return counts;
+  }, {});
+
+  const preferredOrder = [
+    "Not viewed yet",
+    "Awaiting intake",
+    "Sourcing",
+    "Ready to share",
+    "Shortlist sent",
+    "Client responded",
+    "Payment received"
+  ];
+
+  summary.innerHTML = preferredOrder
+    .filter((status) => statusCounts[status])
+    .map((status) => `
+      <div class="status-summary-row">
+        <strong>${escapeHtml(status)}</strong>
+        <span>${statusCounts[status]}</span>
+      </div>
+    `).join("");
 }
 
 function renderProfiles() {
@@ -349,16 +526,50 @@ function pushProfileToRequest(profileId, requestId) {
     return;
   }
 
-  selectedProfileIds = [...new Set([...selectedProfileIds, profile.id])];
+  request.viewed = true;
+  request.intakeComplete = true;
+  request.pushedProfileIds = [...new Set([...(request.pushedProfileIds || []), profile.id])];
+  selectedProfileIds = request.pushedProfileIds;
   currentShortlist = {
     ...currentShortlist,
+    requestId: request.id,
     organization: request.organization,
     title: `${request.role} shortlist`,
-    profileIds: selectedProfileIds
+    annualGrossPay: request.annualGrossPay || 0,
+    profileIds: selectedProfileIds,
+    clientSelectedProfileIds: [],
+    paymentComplete: false,
+    redactedProfiles: []
   };
 
   renderAll();
   showToast(`${profile.name} pushed to ${request.organization}`);
+}
+
+function openNextNewRequest() {
+  const request = requests.find((item) => !item.viewed) || requests.find((item) => getRequestStatus(item) === "Awaiting intake") || requests[0];
+
+  if (!request) {
+    showToast("No shortlist requests available");
+    return;
+  }
+
+  request.viewed = true;
+  currentShortlist = {
+    ...currentShortlist,
+    requestId: request.id,
+    organization: request.organization,
+    title: `${request.role} shortlist`,
+    annualGrossPay: request.annualGrossPay || 0,
+    profileIds: request.pushedProfileIds?.length ? request.pushedProfileIds : selectedProfileIds,
+    clientSelectedProfileIds: [],
+    paymentComplete: false,
+    redactedProfiles: []
+  };
+  selectedProfileIds = currentShortlist.profileIds;
+  renderAll();
+  setSection("shortlists");
+  showToast(`Opened ${request.organization} request`);
 }
 
 function downloadProfiles() {
@@ -454,9 +665,10 @@ function renderProfileSummary() {
 function renderOrganizationOptions() {
   const select = document.querySelector("#organization-select");
   select.innerHTML = requests.map((request) => `
-    <option value="${escapeHtml(request.organization)}">${escapeHtml(request.organization)} / ${escapeHtml(request.role)}</option>
+    <option value="${escapeHtml(request.id)}">${escapeHtml(request.organization)} / ${escapeHtml(request.role)}</option>
   `).join("");
-  select.value = currentShortlist.organization;
+  const relatedRequest = getRelatedRequestForShortlist();
+  select.value = relatedRequest?.id || requests[0]?.id || "";
 }
 
 function renderSelectableProfiles() {
@@ -507,26 +719,195 @@ function renderShortlistOutput() {
 
 function renderClientPreview() {
   const clientProfiles = document.querySelector("#client-profiles");
-  const redactedProfiles = getShortlistProfiles().map(redactProfile);
+  const redactedProfiles = getClientVisibleProfiles();
+  const selectedIds = new Set((currentShortlist.clientSelectedProfileIds || []).map(String));
   document.querySelector("#client-title").textContent = `${currentShortlist.organization}: ${currentShortlist.title}`;
+  document.querySelector("#client-summary").textContent = `${redactedProfiles.length} redacted profiles shared for review. Contact details and direct CV files stay hidden until payment is confirmed.`;
 
-  clientProfiles.innerHTML = redactedProfiles.map((profile) => `
-    <article class="client-card">
-      <h3>${escapeHtml(profile.name)}</h3>
-      <div class="meta">${escapeHtml(profile.role)} / ${escapeHtml(profile.location)} / ${escapeHtml(profile.experience)}</div>
-      <div class="tag-list">${profile.skills.map((skill) => `<span class="tag">${escapeHtml(skill)}</span>`).join("")}</div>
-      <div class="client-actions">
-        <button>Interested</button>
-        <button>Maybe</button>
-        <button>Not fit</button>
-      </div>
-    </article>
-  `).join("");
+  if (!redactedProfiles.length) {
+    clientProfiles.innerHTML = `
+      <article class="client-card">
+        <h3>No profiles shared yet</h3>
+        <p class="meta">Add profiles to this shortlist from the admin builder, then generate a secure link.</p>
+      </article>
+    `;
+    renderClientBilling();
+    return;
+  }
+
+  clientProfiles.innerHTML = redactedProfiles.map((profile) => {
+    const isSelected = selectedIds.has(String(profile.id));
+    return `
+      <article class="client-card ${isSelected ? "selected" : ""}">
+        <label class="client-select-row">
+          <input type="checkbox" data-client-profile-id="${escapeHtml(profile.id)}" ${isSelected ? "checked" : ""}>
+          <span>
+            <strong>${escapeHtml(profile.name)}</strong>
+            <span class="meta">${escapeHtml(profile.role)} / ${escapeHtml(profile.location)} / ${escapeHtml(profile.experience)}</span>
+          </span>
+        </label>
+        <p>${escapeHtml(profile.summary || "Relevant experience summary is being prepared.")}</p>
+        <div class="tag-list">${(profile.skills || []).map((skill) => `<span class="tag">${escapeHtml(skill)}</span>`).join("")}</div>
+        <details class="client-profile-detail">
+          <summary>Open profile experience</summary>
+          <p>${escapeHtml(profile.summary || "Experience summary not available yet.")}</p>
+          <p class="redacted-note">${escapeHtml(profile.notes || "Contact details are hidden until payment is confirmed.")}</p>
+        </details>
+      </article>
+    `;
+  }).join("");
+
+  clientProfiles.querySelectorAll("[data-client-profile-id]").forEach((checkbox) => {
+    checkbox.addEventListener("change", () => {
+      const ids = new Set((currentShortlist.clientSelectedProfileIds || []).map(String));
+      if (checkbox.checked) {
+        ids.add(checkbox.dataset.clientProfileId);
+      } else {
+        ids.delete(checkbox.dataset.clientProfileId);
+      }
+      currentShortlist.clientSelectedProfileIds = Array.from(ids);
+      renderClientPreview();
+    });
+  });
+
+  renderClientBilling();
+}
+
+function renderClientBilling() {
+  const selectedCount = (currentShortlist.clientSelectedProfileIds || []).length;
+  const grossPay = getGrossPayBasis();
+  const feeRate = Number(currentShortlist.feeRate || 0.005);
+  const feePerProfile = grossPay * feeRate;
+  const totalFee = selectedCount * feePerProfile;
+  const paymentNote = document.querySelector("#client-payment-note");
+
+  document.querySelector("#client-selected-count").textContent = selectedCount;
+  document.querySelector("#client-gross-pay").textContent = formatMoney(grossPay);
+  document.querySelector("#client-fee-per-profile").textContent = formatMoney(feePerProfile);
+  document.querySelector("#client-total-fee").textContent = formatMoney(totalFee);
+
+  clientPaymentButton.disabled = selectedCount === 0;
+  clientPaymentButton.textContent = selectedCount
+    ? currentShortlist.paymentComplete ? "Download selected profiles" : "Make payment to unlock"
+    : "Select profiles to continue";
+
+  paymentNote.textContent = currentShortlist.paymentComplete
+    ? "Payment is marked as received for this prototype. The selected profile download is now available."
+    : "Select one or more profiles. The fee is calculated as 0.5% of the annual gross pay per selected profile.";
+}
+
+function downloadSelectedClientProfiles() {
+  const selectedIds = (currentShortlist.clientSelectedProfileIds || []).map(String);
+  const redactedById = new Map(getClientVisibleProfiles().map((profile) => [String(profile.id), profile]));
+  const selectedProfiles = selectedIds.map((id) => {
+    const fullProfile = profiles.find((profile) => String(profile.id) === id);
+    if (fullProfile) return fullProfile;
+
+    return {
+      ...redactedById.get(id),
+      contact: "Full contact details require backend payment unlock."
+    };
+  });
+
+  const payload = {
+    shortlist: {
+      organization: currentShortlist.organization,
+      title: currentShortlist.title,
+      paymentStatus: "paid",
+      selectedProfiles: selectedIds.length,
+      totalFee: selectedIds.length * getGrossPayBasis() * Number(currentShortlist.feeRate || 0.005)
+    },
+    profiles: selectedProfiles
+  };
+
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `urgent-recruite-shortlist-${currentShortlist.token}.json`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+  showToast("Selected profiles downloaded");
+}
+
+function handleClientPaymentOrDownload() {
+  if (!(currentShortlist.clientSelectedProfileIds || []).length) {
+    showToast("Select at least one profile first");
+    return;
+  }
+
+  if (!currentShortlist.paymentComplete) {
+    currentShortlist.paymentComplete = true;
+    const relatedRequest = getRelatedRequestForShortlist();
+    if (relatedRequest) {
+      relatedRequest.clientResponse = "responded";
+      relatedRequest.paymentStatus = "paid";
+    }
+    renderAll();
+    showToast("Payment marked as received for testing");
+    return;
+  }
+
+  downloadSelectedClientProfiles();
+}
+
+function hydrateShortlistFromHash() {
+  const hash = window.location.hash.replace(/^#/, "");
+  const params = new URLSearchParams(hash);
+
+  if (!params.has("shortlist")) return false;
+
+  const token = params.get("shortlist");
+  let payload = null;
+
+  if (params.get("payload")) {
+    try {
+      payload = decodeSharePayload(params.get("payload"));
+    } catch {
+      payload = null;
+    }
+  }
+
+  if (!payload && token) {
+    payload = getStoredShortlist(token);
+  }
+
+  if (payload) {
+    currentShortlist = {
+      ...currentShortlist,
+      token: payload.token || token || currentShortlist.token,
+      requestId: payload.requestId || "",
+      organization: payload.organization || "Client shortlist",
+      title: payload.title || "Shared profiles",
+      annualGrossPay: Number(payload.annualGrossPay || 0),
+      feeRate: Number(payload.feeRate || 0.005),
+      profileIds: (payload.profiles || []).map((profile) => profile.id),
+      clientSelectedProfileIds: [],
+      paymentComplete: false,
+      redactedProfiles: payload.profiles || []
+    };
+  } else {
+    currentShortlist = {
+      ...currentShortlist,
+      token: token || currentShortlist.token,
+      clientSelectedProfileIds: [],
+      paymentComplete: false
+    };
+  }
+
+  return true;
+}
+
+function setPublicClientView(enabled) {
+  document.body.classList.toggle("public-client-view", enabled);
 }
 
 function renderAll() {
   renderMetrics();
   renderRequests();
+  renderStatusSummary();
   renderProfiles();
   renderOrganizationOptions();
   renderSelectableProfiles();
@@ -541,16 +922,11 @@ navItems.forEach((item) => {
 document.querySelector("#open-builder").addEventListener("click", () => setSection("shortlists"));
 
 document.querySelector("#copy-link").addEventListener("click", async () => {
+  storeSharedShortlist();
   await copyText(buildShareUrl(), "Client link copied");
 });
 
-document.querySelector("#share-copy").addEventListener("click", async () => {
-  await copyText(buildShareUrl(), "Generated link copied");
-});
-
-document.querySelector("#new-request").addEventListener("click", () => {
-  showToast("Next step: connect this to your website request form");
-});
+document.querySelector("#new-request").addEventListener("click", openNextNewRequest);
 
 ["#filter-name", "#filter-location", "#filter-experience", "#filter-keyword"].forEach((selector) => {
   document.querySelector(selector).addEventListener("input", renderProfiles);
@@ -561,9 +937,9 @@ document.querySelector("#clear-filters").addEventListener("click", () => {
   renderProfiles();
 });
 
-document.querySelector("#download-profiles").addEventListener("click", downloadProfiles);
+document.querySelector("#topbar-download-profiles").addEventListener("click", downloadProfiles);
 
-document.querySelector("#upload-profiles").addEventListener("click", () => {
+document.querySelector("#topbar-upload-profiles").addEventListener("click", () => {
   document.querySelector("#profile-upload-input").click();
 });
 
@@ -572,21 +948,46 @@ document.querySelector("#profile-upload-input").addEventListener("change", (even
   event.target.value = "";
 });
 
+clientPaymentButton.addEventListener("click", handleClientPaymentOrDownload);
+
 document.querySelector("#generate-shortlist").addEventListener("click", () => {
+  const requestId = document.querySelector("#organization-select").value;
+  const relatedRequest = requests.find((request) => String(request.id) === String(requestId));
+  const organization = relatedRequest?.organization || "Selected organization";
+  if (relatedRequest) {
+    relatedRequest.viewed = true;
+    relatedRequest.intakeComplete = true;
+    relatedRequest.linkSharedCount = (relatedRequest.linkSharedCount || 0) + 1;
+    relatedRequest.pushedProfileIds = [...new Set([...(relatedRequest.pushedProfileIds || []), ...selectedProfileIds])];
+  }
+
   currentShortlist = {
     token: `sl-${Math.random().toString(16).slice(2, 8)}`,
-    organization: document.querySelector("#organization-select").value,
+    requestId: relatedRequest?.id || "",
+    organization,
     title: document.querySelector("#shortlist-title").value,
-    profileIds: selectedProfileIds
+    annualGrossPay: relatedRequest?.annualGrossPay || 0,
+    profileIds: selectedProfileIds,
+    clientSelectedProfileIds: [],
+    paymentComplete: false,
+    redactedProfiles: []
   };
+  currentShortlist.redactedProfiles = getShortlistProfiles().map(redactProfile);
+  storeSharedShortlist();
   renderAll();
   setSection("preview");
   showToast("Secure redacted view generated");
 });
 
 loadFrontendSubmissions();
+const openedPublicClientView = hydrateShortlistFromHash();
 renderAll();
+setPublicClientView(openedPublicClientView);
+setSection(openedPublicClientView ? "preview" : "dashboard");
 
-if (window.location.hash.startsWith("#shortlist=")) {
-  setSection("preview");
-}
+window.addEventListener("hashchange", () => {
+  const isPublicClientView = hydrateShortlistFromHash();
+  renderAll();
+  setPublicClientView(isPublicClientView);
+  setSection(isPublicClientView ? "preview" : "dashboard");
+});

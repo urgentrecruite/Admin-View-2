@@ -119,6 +119,12 @@ const toast = document.querySelector("#toast");
 const shareUrl = document.querySelector("#share-url");
 const topbarActions = document.querySelectorAll(".topbar-action");
 const clientPaymentButton = document.querySelector("#client-payment-button");
+const authPanel = document.querySelector("#auth-panel");
+const authForm = document.querySelector("#auth-form");
+const authEmail = document.querySelector("#auth-email");
+const authPassword = document.querySelector("#auth-password");
+const signOutButton = document.querySelector("#sign-out");
+let supabaseSession = null;
 
 const titles = {
   dashboard: "Admin dashboard",
@@ -132,6 +138,44 @@ function showToast(message) {
   toast.textContent = message;
   toast.classList.add("show");
   window.setTimeout(() => toast.classList.remove("show"), 2200);
+}
+
+function getSupabaseClient() {
+  return window.urgentRecruiteSupabase || null;
+}
+
+function isUuid(value) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value || ""));
+}
+
+function toIsoDateLabel(value) {
+  return value ? new Date(value).toLocaleDateString() : "Supabase";
+}
+
+function sanitizeFileName(fileName) {
+  return String(fileName || "upload")
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "");
+}
+
+function hasUploadedFile(file) {
+  return file instanceof File && Boolean(file.name);
+}
+
+async function uploadSupabaseFile(file, bucket, folder) {
+  const client = getSupabaseClient();
+  if (!client || !hasUploadedFile(file)) return { path: "", name: file?.name || "" };
+
+  const path = `${folder}/${Date.now()}-${sanitizeFileName(file.name)}`;
+  const { data, error } = await client.storage.from(bucket).upload(path, file, {
+    cacheControl: "3600",
+    upsert: false
+  });
+
+  if (error) throw error;
+  return { path: data.path, name: file.name };
 }
 
 function parseMoney(value) {
@@ -225,6 +269,107 @@ function getRequestActivityText(request) {
 
 function getOpenRequests() {
   return requests.filter((request) => !["closed", "completed", "archived"].includes(String(request.workflowState || "").toLowerCase()));
+}
+
+function mapSupabaseProfile(row) {
+  return {
+    id: row.id,
+    name: row.full_name || "Unnamed candidate",
+    role: row.role || "Candidate profile",
+    location: row.location || "Location not provided",
+    experience: row.experience || "Experience not provided",
+    skills: Array.isArray(row.skills) && row.skills.length ? row.skills : [row.role || "General profile"].filter(Boolean),
+    source: row.source === "intent" ? "intent" : "cv",
+    submittedAt: toIsoDateLabel(row.created_at),
+    summary: row.summary || "No profile summary provided yet.",
+    contact: row.contact_details || [row.email, row.phone, row.linkedin].filter(Boolean).join(" / ") || "No contact details provided",
+    notes: row.notes || (row.cv_file_name ? `Uploaded file: ${row.cv_file_name}` : "Saved in Supabase"),
+    cvFilePath: row.cv_file_path || "",
+    cvFileName: row.cv_file_name || ""
+  };
+}
+
+function mapSupabaseRequest(row) {
+  return {
+    id: row.id,
+    organization: row.organization || "Unnamed organization",
+    contact: row.contact_name || row.work_email || "No contact provided",
+    role: row.job_title || "Shortlist request",
+    requested: toIsoDateLabel(row.created_at),
+    annualGrossPay: Number(row.annual_gross_pay || 0),
+    jobDescription: row.job_description || "",
+    jobSpecification: row.job_specification || "",
+    generatedBrief: row.generated_brief || "",
+    jobDocument: row.job_document_name || "",
+    viewed: Boolean(row.viewed),
+    intakeComplete: Boolean(row.intake_complete),
+    pushedProfileIds: [],
+    linkSharedCount: row.link_shared_count || 0,
+    clientResponse: row.client_response || null,
+    paymentStatus: row.payment_status || "unpaid",
+    workflowState: row.workflow_state || "open"
+  };
+}
+
+function profileToSupabaseRow(profile) {
+  const contactParts = String(profile.contact || "").split("/").map((part) => part.trim());
+  return {
+    full_name: profile.name || "Unnamed candidate",
+    role: profile.role || "Candidate profile",
+    location: profile.location || "",
+    experience: profile.experience || "",
+    skills: Array.isArray(profile.skills) ? profile.skills : [],
+    source: profile.source === "intent" ? "intent" : "cv",
+    summary: profile.summary || "",
+    contact_details: profile.contact || "",
+    email: contactParts.find((part) => part.includes("@")) || "",
+    phone: contactParts.find((part) => part.startsWith("+")) || "",
+    linkedin: contactParts.find((part) => part.includes("linkedin")) || "",
+    notes: profile.notes || "",
+    cv_file_name: profile.cvFileName || "",
+    cv_file_path: profile.cvFilePath || ""
+  };
+}
+
+async function loadSupabaseData() {
+  const client = getSupabaseClient();
+  if (!client || !supabaseSession) return false;
+
+  const [profileResult, requestResult] = await Promise.all([
+    client.from("profiles").select("*").order("created_at", { ascending: false }),
+    client.from("shortlist_requests").select("*").order("created_at", { ascending: false })
+  ]);
+
+  if (profileResult.error) throw profileResult.error;
+  if (requestResult.error) throw requestResult.error;
+
+  if (profileResult.data?.length) {
+    profiles = profileResult.data.map(mapSupabaseProfile);
+    activeProfileId = profiles[0]?.id || null;
+    selectedProfileIds = profiles.slice(0, 2).map((profile) => profile.id);
+  }
+
+  if (requestResult.data) {
+    requests.length = 0;
+    requests.push(...requestResult.data.map(mapSupabaseRequest));
+  }
+
+  if (requests.length) {
+    const request = requests[0];
+    currentShortlist = {
+      ...currentShortlist,
+      requestId: request.id,
+      organization: request.organization,
+      title: `${request.role} shortlist`,
+      annualGrossPay: request.annualGrossPay || 0,
+      profileIds: selectedProfileIds,
+      clientSelectedProfileIds: [],
+      paymentComplete: false,
+      redactedProfiles: []
+    };
+  }
+
+  return true;
 }
 
 function profileMatchesFilters(profile) {
@@ -345,6 +490,82 @@ function storeSharedShortlist(payload = buildSharePayload()) {
   stored[payload.token] = payload;
   localStorage.setItem("urgentRecruiteSharedShortlists", JSON.stringify(stored));
   return payload;
+}
+
+async function saveCurrentShortlistToSupabase() {
+  const client = getSupabaseClient();
+  if (!client || !supabaseSession) return false;
+
+  const payload = buildSharePayload();
+  const requestId = isUuid(currentShortlist.requestId) ? currentShortlist.requestId : null;
+  const { data: shortlist, error: shortlistError } = await client
+    .from("shortlists")
+    .upsert({
+      token: payload.token,
+      request_id: requestId,
+      organization: payload.organization,
+      title: payload.title,
+      annual_gross_pay: payload.annualGrossPay || null,
+      fee_rate: payload.feeRate || 0.005,
+      payment_complete: false
+    }, { onConflict: "token" })
+    .select("id")
+    .single();
+
+  if (shortlistError) throw shortlistError;
+
+  await client.from("shortlist_profiles").delete().eq("shortlist_id", shortlist.id);
+
+  const profileRows = currentShortlist.profileIds
+    .filter((profileId) => isUuid(profileId))
+    .map((profileId) => ({
+      shortlist_id: shortlist.id,
+      profile_id: profileId
+    }));
+
+  if (profileRows.length) {
+    const { error: profileError } = await client.from("shortlist_profiles").insert(profileRows);
+    if (profileError) throw profileError;
+  }
+
+  if (requestId) {
+    await client
+      .from("shortlist_requests")
+      .update({
+        viewed: true,
+        intake_complete: true,
+        link_shared_count: getRelatedRequestForShortlist()?.linkSharedCount || 1
+      })
+      .eq("id", requestId);
+  }
+
+  return true;
+}
+
+async function loadPublicShortlistFromSupabase(token) {
+  const client = getSupabaseClient();
+  if (!client || !token) return false;
+
+  const { data, error } = await client.rpc("get_public_shortlist", {
+    public_token: token
+  });
+
+  if (error || !data || !data.token) return false;
+
+  currentShortlist = {
+    ...currentShortlist,
+    token: data.token,
+    organization: data.organization || "Client shortlist",
+    title: data.title || "Shared profiles",
+    annualGrossPay: Number(data.annualGrossPay || 0),
+    feeRate: Number(data.feeRate || 0.005),
+    profileIds: (data.profiles || []).map((profile) => profile.id),
+    clientSelectedProfileIds: [],
+    paymentComplete: false,
+    redactedProfiles: data.profiles || []
+  };
+
+  return true;
 }
 
 function getStoredShortlist(token) {
@@ -585,6 +806,62 @@ function downloadProfiles() {
   showToast("Profiles downloaded");
 }
 
+function formatFileSize(size) {
+  if (!size) return "size not available";
+  if (size < 1024) return `${size} bytes`;
+  if (size < 1024 * 1024) return `${Math.round(size / 1024)} KB`;
+  return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function titleCase(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/\b[a-z]/g, (letter) => letter.toUpperCase());
+}
+
+function inferProfileNameFromFileName(fileName) {
+  const stem = String(fileName || "")
+    .replace(/\.[^.]+$/, "")
+    .replace(/[_-]+/g, " ")
+    .replace(/\b(cv|resume|profile|candidate|urgent|recruite)\b/gi, "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  return titleCase(stem || "Uploaded Candidate");
+}
+
+function isJsonUpload(file) {
+  return file.type.includes("json") || /\.json$/i.test(file.name);
+}
+
+async function normalizeUploadedFileProfile(file, index) {
+  const isTextFile = file.type.startsWith("text/") || /\.(txt|rtf)$/i.test(file.name);
+  let excerpt = "";
+
+  if (isTextFile) {
+    excerpt = (await file.text()).replace(/\s+/g, " ").trim().slice(0, 280);
+  }
+
+  return {
+    id: `uploaded-file-${Date.now()}-${index}`,
+    name: inferProfileNameFromFileName(file.name),
+    role: "Uploaded CV",
+    location: "Location not provided",
+    experience: "Experience not provided",
+    skills: ["Uploaded CV"],
+    source: "cv",
+    submittedAt: new Date().toLocaleDateString(),
+    summary: excerpt
+      ? `Uploaded text profile excerpt: ${excerpt}`
+      : "Profile file uploaded from admin. Review the CV, then update the summary when backend parsing is connected.",
+    contact: "Contact details are inside the uploaded file",
+    notes: `Uploaded file: ${file.name} (${formatFileSize(file.size)})`,
+    cvFileName: file.name,
+    cvFilePath: "",
+    _fileObject: file
+  };
+}
+
 function normalizeUploadedProfile(profile, index) {
   return {
     id: profile.id || `uploaded-${Date.now()}-${index}`,
@@ -599,37 +876,107 @@ function normalizeUploadedProfile(profile, index) {
     submittedAt: profile.submittedAt || new Date().toLocaleDateString(),
     summary: profile.summary || profile.notes || "No profile summary provided yet.",
     contact: profile.contact || [profile.email, profile.phone, profile.linkedin].filter(Boolean).join(" / ") || "No contact details provided",
-    notes: profile.notes || "Uploaded from admin"
+    notes: profile.notes || "Uploaded from admin",
+    cvFileName: profile.cvFileName || profile.cv_file_name || "",
+    cvFilePath: profile.cvFilePath || profile.cv_file_path || ""
   };
 }
 
-async function uploadProfiles(file) {
-  if (!file) return;
+function getProfilesFromJsonUpload(uploaded) {
+  if (Array.isArray(uploaded)) return uploaded;
+  if (Array.isArray(uploaded.profiles)) return uploaded.profiles;
+  if (uploaded.name || uploaded.fullName || uploaded.role || uploaded.field) return [uploaded];
+  return [];
+}
 
-  try {
-    const uploaded = JSON.parse(await file.text());
-    const incomingProfiles = Array.isArray(uploaded) ? uploaded : uploaded.profiles;
+function upsertUploadedProfiles(incomingProfiles) {
+  incomingProfiles.forEach((profile) => {
+    const existingIndex = profiles.findIndex((item) => String(item.id) === String(profile.id));
+    if (existingIndex >= 0) {
+      profiles[existingIndex] = profile;
+    } else {
+      profiles.push(profile);
+    }
+  });
+}
 
-    if (!Array.isArray(incomingProfiles)) {
-      showToast("Upload must be a JSON array of profiles");
-      return;
+async function saveUploadedProfilesToSupabase(incomingProfiles) {
+  const client = getSupabaseClient();
+  if (!client || !supabaseSession || !incomingProfiles.length) return false;
+
+  const rows = [];
+  for (const profile of incomingProfiles) {
+    if (profile._fileObject) {
+      const upload = await uploadSupabaseFile(profile._fileObject, "candidate-cvs", "admin-uploads");
+      profile.cvFileName = upload.name;
+      profile.cvFilePath = upload.path;
+      profile.notes = `Uploaded file: ${upload.name}`;
     }
 
-    incomingProfiles.map(normalizeUploadedProfile).forEach((profile) => {
-      const existingIndex = profiles.findIndex((item) => String(item.id) === String(profile.id));
-      if (existingIndex >= 0) {
-        profiles[existingIndex] = profile;
-      } else {
-        profiles.push(profile);
-      }
-    });
-
-    activeProfileId = incomingProfiles[0]?.id || activeProfileId;
-    renderAll();
-    showToast("Profiles uploaded");
-  } catch (error) {
-    showToast("Could not read that profile file");
+    rows.push(profileToSupabaseRow(profile));
   }
+
+  const { data, error } = await client.from("profiles").insert(rows).select("*");
+  if (error) throw error;
+
+  if (data?.length) {
+    const savedProfiles = data.map(mapSupabaseProfile);
+    upsertUploadedProfiles(savedProfiles);
+    activeProfileId = savedProfiles[0].id;
+  }
+
+  return true;
+}
+
+async function uploadProfiles(fileInput) {
+  const fileList = Array.isArray(fileInput)
+    ? fileInput
+    : fileInput?.length !== undefined && !fileInput.name
+      ? Array.from(fileInput)
+      : [fileInput].filter(Boolean);
+
+  if (!fileList.length) return;
+
+  const normalizedProfiles = [];
+
+  for (const [fileIndex, file] of fileList.entries()) {
+    if (isJsonUpload(file)) {
+      try {
+        const uploaded = JSON.parse(await file.text());
+        const incomingProfiles = getProfilesFromJsonUpload(uploaded);
+
+        if (!incomingProfiles.length) {
+          showToast("JSON upload did not include profile records");
+          continue;
+        }
+
+        incomingProfiles
+          .map((profile, profileIndex) => normalizeUploadedProfile(profile, `${fileIndex}-${profileIndex}`))
+          .forEach((profile) => normalizedProfiles.push(profile));
+      } catch {
+        showToast("Could not read that JSON profile file");
+      }
+    } else {
+      normalizedProfiles.push(await normalizeUploadedFileProfile(file, fileIndex));
+    }
+  }
+
+  if (!normalizedProfiles.length) return;
+
+  try {
+    const savedToSupabase = await saveUploadedProfilesToSupabase(normalizedProfiles);
+    if (!savedToSupabase) {
+      upsertUploadedProfiles(normalizedProfiles);
+      activeProfileId = normalizedProfiles[0].id;
+    }
+  } catch (error) {
+    showToast("Upload saved locally. Check Supabase storage setup.");
+    upsertUploadedProfiles(normalizedProfiles);
+    activeProfileId = normalizedProfiles[0].id;
+  }
+
+  renderAll();
+  showToast(`${normalizedProfiles.length} profile${normalizedProfiles.length === 1 ? "" : "s"} uploaded`);
 }
 
 function renderProfileSummary() {
@@ -904,6 +1251,66 @@ function setPublicClientView(enabled) {
   document.body.classList.toggle("public-client-view", enabled);
 }
 
+function setAuthPanelVisible(visible) {
+  if (authPanel) authPanel.hidden = !visible;
+  if (signOutButton) signOutButton.hidden = !supabaseSession;
+}
+
+async function initializeAdminAuth() {
+  const client = getSupabaseClient();
+  if (!client) {
+    setAuthPanelVisible(false);
+    return false;
+  }
+
+  const { data, error } = await client.auth.getSession();
+  if (error) {
+    setAuthPanelVisible(true);
+    return false;
+  }
+
+  supabaseSession = data.session || null;
+  setAuthPanelVisible(!supabaseSession);
+  return Boolean(supabaseSession);
+}
+
+async function handleAdminSignIn(event) {
+  event.preventDefault();
+  const client = getSupabaseClient();
+  if (!client) return;
+
+  const { data, error } = await client.auth.signInWithPassword({
+    email: authEmail.value.trim(),
+    password: authPassword.value
+  });
+
+  if (error) {
+    showToast("Could not sign in. Check the admin user in Supabase Auth.");
+    return;
+  }
+
+  supabaseSession = data.session || null;
+  setAuthPanelVisible(false);
+  signOutButton.hidden = false;
+
+  try {
+    await loadSupabaseData();
+    renderAll();
+    setSection("dashboard");
+    showToast("Signed in to admin");
+  } catch {
+    showToast("Signed in, but Supabase tables are not ready yet.");
+  }
+}
+
+async function handleAdminSignOut() {
+  const client = getSupabaseClient();
+  if (client) await client.auth.signOut();
+  supabaseSession = null;
+  setAuthPanelVisible(true);
+  showToast("Signed out");
+}
+
 function renderAll() {
   renderMetrics();
   renderRequests();
@@ -918,6 +1325,9 @@ function renderAll() {
 navItems.forEach((item) => {
   item.addEventListener("click", () => setSection(item.dataset.section));
 });
+
+authForm.addEventListener("submit", handleAdminSignIn);
+signOutButton.addEventListener("click", handleAdminSignOut);
 
 document.querySelector("#open-builder").addEventListener("click", () => setSection("shortlists"));
 
@@ -944,13 +1354,13 @@ document.querySelector("#topbar-upload-profiles").addEventListener("click", () =
 });
 
 document.querySelector("#profile-upload-input").addEventListener("change", (event) => {
-  uploadProfiles(event.target.files[0]);
+  uploadProfiles(event.target.files);
   event.target.value = "";
 });
 
 clientPaymentButton.addEventListener("click", handleClientPaymentOrDownload);
 
-document.querySelector("#generate-shortlist").addEventListener("click", () => {
+document.querySelector("#generate-shortlist").addEventListener("click", async () => {
   const requestId = document.querySelector("#organization-select").value;
   const relatedRequest = requests.find((request) => String(request.id) === String(requestId));
   const organization = relatedRequest?.organization || "Selected organization";
@@ -974,19 +1384,49 @@ document.querySelector("#generate-shortlist").addEventListener("click", () => {
   };
   currentShortlist.redactedProfiles = getShortlistProfiles().map(redactProfile);
   storeSharedShortlist();
+  try {
+    await saveCurrentShortlistToSupabase();
+  } catch {
+    showToast("Client link generated locally. Check Supabase shortlist tables.");
+  }
   renderAll();
   setSection("preview");
   showToast("Secure redacted view generated");
 });
 
-loadFrontendSubmissions();
-const openedPublicClientView = hydrateShortlistFromHash();
-renderAll();
-setPublicClientView(openedPublicClientView);
-setSection(openedPublicClientView ? "preview" : "dashboard");
+async function initializeApp() {
+  loadFrontendSubmissions();
+  const openedPublicClientView = hydrateShortlistFromHash();
+  setPublicClientView(openedPublicClientView);
 
-window.addEventListener("hashchange", () => {
+  if (openedPublicClientView) {
+    await loadPublicShortlistFromSupabase(currentShortlist.token).catch(() => false);
+    renderAll();
+    setSection("preview");
+    return;
+  }
+
+  renderAll();
+  setSection("dashboard");
+
+  const isSignedIn = await initializeAdminAuth();
+  if (!isSignedIn) return;
+
+  try {
+    await loadSupabaseData();
+    renderAll();
+  } catch {
+    showToast("Supabase tables are not ready yet. Run the setup SQL.");
+  }
+}
+
+initializeApp();
+
+window.addEventListener("hashchange", async () => {
   const isPublicClientView = hydrateShortlistFromHash();
+  if (isPublicClientView) {
+    await loadPublicShortlistFromSupabase(currentShortlist.token).catch(() => false);
+  }
   renderAll();
   setPublicClientView(isPublicClientView);
   setSection(isPublicClientView ? "preview" : "dashboard");

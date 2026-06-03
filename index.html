@@ -26,6 +26,7 @@
           <button class="nav-item" data-section="profiles">Profiles</button>
           <button class="nav-item" data-section="shortlists">Shortlists</button>
           <button class="nav-item" data-section="preview">Client view</button>
+          <button class="nav-item" data-section="deleted">Deleted bucket</button>
         </nav>
 
         <div class="sidebar-note">
@@ -66,6 +67,10 @@
             <article class="metric">
               <span>Intern submissions</span>
               <strong id="metric-intents">0</strong>
+            </article>
+            <article class="metric">
+              <span>Deleted/rejected</span>
+              <strong id="metric-deleted">0</strong>
             </article>
           </div>
 
@@ -214,6 +219,22 @@
                 <button class="primary-button" id="client-payment-button" type="button" disabled>Select profiles to continue</button>
               </div>
             </div>
+          </div>
+        </section>
+
+        <section class="section" id="deleted">
+          <div class="panel">
+            <div class="panel-header">
+              <div>
+                <p class="eyebrow">90-day review bucket</p>
+                <h2>Deleted and rejected profiles</h2>
+              </div>
+              <button class="danger-button small" id="purge-deleted" type="button">Purge expired</button>
+            </div>
+            <div class="share-box">
+              <p>Profiles rejected by the 200-word screening rule or deleted from the admin stay here for review before permanent removal.</p>
+            </div>
+            <div class="deleted-list" id="deleted-profile-list"></div>
           </div>
         </section>
       </main>

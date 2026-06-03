@@ -98,15 +98,16 @@ let profiles = [
   }
 ];
 
-let selectedProfileIds = [101, 102];
+let selectedProfileIds = [];
 let activeProfileId = 101;
+let deletedProfiles = [];
 let currentShortlist = {
   token: "sl-acme-7f42",
   requestId: 1,
   organization: "Acme Healthcare",
   title: "Operations Manager shortlist",
   annualGrossPay: 85000,
-  profileIds: selectedProfileIds,
+  profileIds: [],
   clientSelectedProfileIds: [],
   paymentComplete: false,
   redactedProfiles: []
@@ -131,7 +132,8 @@ const titles = {
   requests: "Shortlist requests",
   profiles: "Profile bucket",
   shortlists: "Shortlist builder",
-  preview: "Client shortlist view"
+  preview: "Client shortlist view",
+  deleted: "Deleted bucket"
 };
 
 function showToast(message) {
@@ -183,6 +185,13 @@ function parseMoney(value) {
   return Number.isFinite(amount) ? amount : 0;
 }
 
+function countWords(value) {
+  return String(value || "")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean).length;
+}
+
 function formatMoney(amount) {
   const value = Number(amount) || 0;
   if (!value) return "Not provided";
@@ -203,15 +212,18 @@ function getGrossPayBasis() {
   return Number(currentShortlist.annualGrossPay || relatedRequest?.annualGrossPay || 0);
 }
 
-function redactProfile(profile) {
+function redactProfile(profile, index = 0) {
   return {
     id: profile.id,
-    name: profile.name,
+    name: `Profile ${index + 1}`,
     role: profile.role,
     location: profile.location,
     experience: profile.experience,
     skills: profile.skills,
     summary: profile.summary || "Relevant experience summary is being prepared.",
+    experienceDetails: profile.experienceDetails || profile.summary || "Experience details will be expanded after CV parsing.",
+    certifications: profile.certifications || "Certifications will be extracted during recruiter review.",
+    projects: profile.projects || "Projects will be extracted during recruiter review.",
     notes: "Contact details are hidden until payment is confirmed."
   };
 }
@@ -285,7 +297,8 @@ function mapSupabaseProfile(row) {
     contact: row.contact_details || [row.email, row.phone, row.linkedin].filter(Boolean).join(" / ") || "No contact details provided",
     notes: row.notes || (row.cv_file_name ? `Uploaded file: ${row.cv_file_name}` : "Saved in Supabase"),
     cvFilePath: row.cv_file_path || "",
-    cvFileName: row.cv_file_name || ""
+    cvFileName: row.cv_file_name || "",
+    wordCount: row.word_count || 0
   };
 }
 
@@ -311,6 +324,24 @@ function mapSupabaseRequest(row) {
   };
 }
 
+function mapDeletedProfile(row) {
+  return {
+    id: row.id,
+    name: row.full_name || "Unnamed candidate",
+    role: row.role || "Candidate profile",
+    location: row.location || "Location not provided",
+    experience: row.experience || "Experience not provided",
+    source: row.source === "intent" ? "Intern" : "CV submit",
+    summary: row.summary || "No profile summary provided.",
+    contact: row.contact_details || [row.email, row.phone, row.linkedin].filter(Boolean).join(" / ") || "No contact details provided",
+    notes: row.notes || "",
+    reason: row.deletion_reason || "Deleted from admin",
+    wordCount: row.word_count || 0,
+    deletedAt: toIsoDateLabel(row.deleted_at || row.created_at),
+    deleteAfter: toIsoDateLabel(row.delete_after)
+  };
+}
+
 function profileToSupabaseRow(profile) {
   const contactParts = String(profile.contact || "").split("/").map((part) => part.trim());
   return {
@@ -327,7 +358,8 @@ function profileToSupabaseRow(profile) {
     linkedin: contactParts.find((part) => part.includes("linkedin")) || "",
     notes: profile.notes || "",
     cv_file_name: profile.cvFileName || "",
-    cv_file_path: profile.cvFilePath || ""
+    cv_file_path: profile.cvFilePath || "",
+    word_count: profile.wordCount || countWords(profile.summary)
   };
 }
 
@@ -335,18 +367,22 @@ async function loadSupabaseData() {
   const client = getSupabaseClient();
   if (!client || !supabaseSession) return false;
 
-  const [profileResult, requestResult] = await Promise.all([
+  const [profileResult, requestResult, pushedResult, deletedResult] = await Promise.all([
     client.from("profiles").select("*").order("created_at", { ascending: false }),
-    client.from("shortlist_requests").select("*").order("created_at", { ascending: false })
+    client.from("shortlist_requests").select("*").order("created_at", { ascending: false }),
+    client.from("request_profiles").select("*"),
+    client.from("deleted_profiles").select("*").order("deleted_at", { ascending: false })
   ]);
 
   if (profileResult.error) throw profileResult.error;
   if (requestResult.error) throw requestResult.error;
+  if (pushedResult.error) throw pushedResult.error;
+  if (deletedResult.error) throw deletedResult.error;
 
-  if (profileResult.data?.length) {
+  if (Array.isArray(profileResult.data)) {
     profiles = profileResult.data.map(mapSupabaseProfile);
     activeProfileId = profiles[0]?.id || null;
-    selectedProfileIds = profiles.slice(0, 2).map((profile) => profile.id);
+    selectedProfileIds = [];
   }
 
   if (requestResult.data) {
@@ -354,8 +390,19 @@ async function loadSupabaseData() {
     requests.push(...requestResult.data.map(mapSupabaseRequest));
   }
 
+  if (pushedResult.data?.length) {
+    requests.forEach((request) => {
+      request.pushedProfileIds = pushedResult.data
+        .filter((row) => String(row.request_id) === String(request.id))
+        .map((row) => row.profile_id);
+    });
+  }
+
+  deletedProfiles = (deletedResult.data || []).map(mapDeletedProfile);
+
   if (requests.length) {
     const request = requests[0];
+    selectedProfileIds = request.pushedProfileIds || [];
     currentShortlist = {
       ...currentShortlist,
       requestId: request.id,
@@ -399,6 +446,7 @@ function profileMatchesFilters(profile) {
 function loadFrontendSubmissions() {
   const storedProfiles = JSON.parse(localStorage.getItem("urgentRecruiteProfiles") || "[]");
   const storedRequests = JSON.parse(localStorage.getItem("urgentRecruiteShortlistRequests") || "[]");
+  const storedDeletedProfiles = JSON.parse(localStorage.getItem("urgentRecruiteDeletedProfiles") || "[]");
 
   storedProfiles.forEach((submission, index) => {
     const id = `frontend-profile-${submission.submittedAt || index}`;
@@ -440,6 +488,27 @@ function loadFrontendSubmissions() {
       linkSharedCount: 0,
       clientResponse: null,
       paymentStatus: "unpaid"
+    });
+  });
+
+  storedDeletedProfiles.forEach((submission, index) => {
+    const id = `frontend-deleted-${submission.submittedAt || index}`;
+    if (deletedProfiles.some((profile) => profile.id === id)) return;
+
+    deletedProfiles.push({
+      id,
+      name: submission.full_name || "Unnamed candidate",
+      role: submission.role || "Candidate profile",
+      location: submission.location || "Location not provided",
+      experience: submission.experience || "Experience not provided",
+      source: submission.source === "intent" ? "Intern" : "CV submit",
+      summary: submission.summary || "No profile summary provided.",
+      contact: submission.contact_details || "No contact details provided",
+      notes: submission.notes || "",
+      reason: submission.deletion_reason || "Less than 200 written profile words",
+      wordCount: submission.word_count || 0,
+      deletedAt: submission.submittedAt ? new Date(submission.submittedAt).toLocaleDateString() : "Frontend",
+      deleteAfter: submission.delete_after ? new Date(submission.delete_after).toLocaleDateString() : "90 days"
     });
   });
 }
@@ -612,6 +681,7 @@ function renderMetrics() {
   document.querySelector("#metric-profiles").textContent = profiles.length;
   document.querySelector("#metric-shortlists").textContent = requests.reduce((total, request) => total + (request.linkSharedCount || 0), 0);
   document.querySelector("#metric-intents").textContent = profiles.filter((profile) => profile.source === "intent").length;
+  document.querySelector("#metric-deleted").textContent = deletedProfiles.length;
   shareUrl.value = buildShareUrl();
 }
 
@@ -667,6 +737,99 @@ function renderStatusSummary() {
     `).join("");
 }
 
+async function openCvForProfile(profileId) {
+  const profile = profiles.find((item) => String(item.id) === String(profileId));
+  if (!profile) return;
+
+  activeProfileId = profile.id;
+  renderProfileSummary();
+
+  if (!profile.cvFilePath) {
+    showToast("Profile summary opened. No CV file is attached yet.");
+    return;
+  }
+
+  const client = getSupabaseClient();
+  if (!client || !supabaseSession) {
+    showToast("Sign in to open private CV files.");
+    return;
+  }
+
+  const { data, error } = await client.storage
+    .from("candidate-cvs")
+    .createSignedUrl(profile.cvFilePath, 300);
+
+  if (error || !data?.signedUrl) {
+    showToast("Could not open CV file. Check storage permissions.");
+    return;
+  }
+
+  window.open(data.signedUrl, "_blank", "noopener");
+}
+
+async function moveProfileToDeleted(profileId, reason = "Deleted from admin") {
+  const profile = profiles.find((item) => String(item.id) === String(profileId));
+  if (!profile) return;
+
+  const deletedProfile = {
+    id: `deleted-${profile.id}-${Date.now()}`,
+    name: profile.name,
+    role: profile.role,
+    location: profile.location,
+    experience: profile.experience,
+    source: profile.source === "intent" ? "Intern" : "CV submit",
+    summary: profile.summary,
+    contact: profile.contact,
+    notes: profile.notes,
+    reason,
+    wordCount: profile.wordCount || countWords(profile.summary),
+    deletedAt: new Date().toLocaleDateString(),
+    deleteAfter: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toLocaleDateString()
+  };
+
+  const client = getSupabaseClient();
+  if (client && supabaseSession) {
+    const { error: insertError } = await client.from("deleted_profiles").insert({
+      full_name: profile.name,
+      email: "",
+      phone: "",
+      linkedin: "",
+      role: profile.role,
+      location: profile.location,
+      experience: profile.experience,
+      source: profile.source === "intent" ? "intent" : "cv",
+      summary: profile.summary,
+      word_count: deletedProfile.wordCount,
+      contact_details: profile.contact,
+      notes: profile.notes,
+      deletion_reason: reason,
+      delete_after: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString()
+    });
+
+    if (insertError) {
+      showToast("Could not move profile to deleted bucket.");
+      return;
+    }
+
+    if (isUuid(profile.id)) {
+      await client.from("request_profiles").delete().eq("profile_id", profile.id);
+      await client.from("profiles").delete().eq("id", profile.id);
+    }
+  }
+
+  deletedProfiles = [deletedProfile, ...deletedProfiles];
+  profiles = profiles.filter((item) => String(item.id) !== String(profileId));
+  requests.forEach((request) => {
+    request.pushedProfileIds = (request.pushedProfileIds || []).filter((id) => String(id) !== String(profileId));
+  });
+  selectedProfileIds = selectedProfileIds.filter((id) => String(id) !== String(profileId));
+  if (String(activeProfileId) === String(profileId)) {
+    activeProfileId = profiles[0]?.id || null;
+  }
+  renderAll();
+  showToast("Profile moved to deleted bucket");
+}
+
 function renderProfiles() {
   const profileList = document.querySelector("#profile-list");
   const duplicateIds = getDuplicateIds();
@@ -707,38 +870,32 @@ function renderProfiles() {
   `).join("");
 
   profileList.querySelectorAll(".profile-open").forEach((button) => {
-    button.addEventListener("click", () => {
+    button.addEventListener("click", async () => {
       activeProfileId = button.dataset.profileId;
       renderProfiles();
+      await openCvForProfile(button.dataset.profileId);
     });
   });
 
   profileList.querySelectorAll(".profile-delete").forEach((button) => {
-    button.addEventListener("click", () => {
-      const id = button.dataset.profileId;
-      profiles = profiles.filter((profile) => String(profile.id) !== String(id));
-      selectedProfileIds = selectedProfileIds.filter((profileId) => String(profileId) !== String(id));
-      if (String(activeProfileId) === String(id)) {
-        activeProfileId = profiles[0]?.id || null;
-      }
-      renderAll();
-      showToast("Profile deleted from admin view");
+    button.addEventListener("click", async () => {
+      await moveProfileToDeleted(button.dataset.profileId, "Deleted by admin");
     });
   });
 
   profileList.querySelectorAll(".profile-push").forEach((button) => {
-    button.addEventListener("click", () => {
+    button.addEventListener("click", async () => {
       const id = button.dataset.profileId;
       const select = profileList.querySelector(`.push-target[data-profile-id="${id}"]`);
       const requestId = select?.value;
-      pushProfileToRequest(id, requestId);
+      await pushProfileToRequest(id, requestId);
     });
   });
 
   renderProfileSummary();
 }
 
-function pushProfileToRequest(profileId, requestId) {
+async function pushProfileToRequest(profileId, requestId) {
   const profile = profiles.find((item) => String(item.id) === String(profileId));
   const request = requests.find((item) => String(item.id) === String(requestId));
 
@@ -750,6 +907,25 @@ function pushProfileToRequest(profileId, requestId) {
   request.viewed = true;
   request.intakeComplete = true;
   request.pushedProfileIds = [...new Set([...(request.pushedProfileIds || []), profile.id])];
+
+  const client = getSupabaseClient();
+  if (client && supabaseSession && isUuid(request.id) && isUuid(profile.id)) {
+    const { error } = await client.from("request_profiles").upsert({
+      request_id: request.id,
+      profile_id: profile.id
+    }, { onConflict: "request_id,profile_id" });
+
+    if (error) {
+      showToast("Could not save push to Supabase.");
+      return;
+    }
+
+    await client.from("shortlist_requests").update({
+      viewed: true,
+      intake_complete: true
+    }).eq("id", request.id);
+  }
+
   selectedProfileIds = request.pushedProfileIds;
   currentShortlist = {
     ...currentShortlist,
@@ -782,7 +958,7 @@ function openNextNewRequest() {
     organization: request.organization,
     title: `${request.role} shortlist`,
     annualGrossPay: request.annualGrossPay || 0,
-    profileIds: request.pushedProfileIds?.length ? request.pushedProfileIds : selectedProfileIds,
+    profileIds: request.pushedProfileIds || [],
     clientSelectedProfileIds: [],
     paymentComplete: false,
     redactedProfiles: []
@@ -1006,7 +1182,12 @@ function renderProfileSummary() {
     </div>
     <div class="private-line">Admin contact: ${escapeHtml(profile.contact)}</div>
     <p class="meta">${escapeHtml(profile.notes)}</p>
+    <button class="primary-button small" type="button" id="summary-open-cv">${profile.cvFilePath ? "Open CV file" : "Open profile summary"}</button>
   `;
+
+  document.querySelector("#summary-open-cv")?.addEventListener("click", () => {
+    openCvForProfile(profile.id);
+  });
 }
 
 function renderOrganizationOptions() {
@@ -1018,10 +1199,41 @@ function renderOrganizationOptions() {
   select.value = relatedRequest?.id || requests[0]?.id || "";
 }
 
+function selectRequestForShortlist(requestId) {
+  const request = requests.find((item) => String(item.id) === String(requestId));
+  if (!request) return;
+
+  selectedProfileIds = request.pushedProfileIds || [];
+  currentShortlist = {
+    ...currentShortlist,
+    requestId: request.id,
+    organization: request.organization,
+    title: `${request.role} shortlist`,
+    annualGrossPay: request.annualGrossPay || 0,
+    profileIds: selectedProfileIds,
+    clientSelectedProfileIds: [],
+    paymentComplete: false,
+    redactedProfiles: []
+  };
+  renderSelectableProfiles();
+  renderShortlistOutput();
+  renderClientPreview();
+}
+
 function renderSelectableProfiles() {
   const selectableProfiles = document.querySelector("#selectable-profiles");
+  const request = getRelatedRequestForShortlist();
+  const pushedIds = new Set((request?.pushedProfileIds || []).map(String));
+  const pushedProfiles = profiles.filter((profile) => pushedIds.has(String(profile.id)));
 
-  selectableProfiles.innerHTML = profiles.map((profile) => `
+  if (!pushedProfiles.length) {
+    selectableProfiles.innerHTML = `<p class="meta">No profiles have been pushed to this organization yet. Push profiles from the Profile bucket first.</p>`;
+    selectedProfileIds = [];
+    currentShortlist.profileIds = [];
+    return;
+  }
+
+  selectableProfiles.innerHTML = pushedProfiles.map((profile) => `
     <label class="select-row">
       <input type="checkbox" value="${profile.id}" ${selectedProfileIds.some((id) => String(id) === String(profile.id)) ? "checked" : ""}>
       <span>
@@ -1039,6 +1251,7 @@ function renderSelectableProfiles() {
       } else {
         selectedProfileIds = selectedProfileIds.filter((profileId) => String(profileId) !== String(id));
       }
+      currentShortlist.profileIds = selectedProfileIds;
       renderShortlistOutput();
     });
   });
@@ -1082,22 +1295,25 @@ function renderClientPreview() {
     return;
   }
 
-  clientProfiles.innerHTML = redactedProfiles.map((profile) => {
+  clientProfiles.innerHTML = redactedProfiles.map((profile, index) => {
     const isSelected = selectedIds.has(String(profile.id));
+    const profileLabel = `Profile ${index + 1}`;
     return `
       <article class="client-card ${isSelected ? "selected" : ""}">
         <label class="client-select-row">
           <input type="checkbox" data-client-profile-id="${escapeHtml(profile.id)}" ${isSelected ? "checked" : ""}>
           <span>
-            <strong>${escapeHtml(profile.name)}</strong>
+            <strong>${escapeHtml(profileLabel)}</strong>
             <span class="meta">${escapeHtml(profile.role)} / ${escapeHtml(profile.location)} / ${escapeHtml(profile.experience)}</span>
           </span>
         </label>
         <p>${escapeHtml(profile.summary || "Relevant experience summary is being prepared.")}</p>
         <div class="tag-list">${(profile.skills || []).map((skill) => `<span class="tag">${escapeHtml(skill)}</span>`).join("")}</div>
         <details class="client-profile-detail">
-          <summary>Open profile experience</summary>
-          <p>${escapeHtml(profile.summary || "Experience summary not available yet.")}</p>
+          <summary>Open redacted profile</summary>
+          <p><strong>Experience:</strong> ${escapeHtml(profile.experienceDetails || profile.summary || "Experience summary not available yet.")}</p>
+          <p><strong>Certifications:</strong> ${escapeHtml(profile.certifications || "To be confirmed during recruiter review.")}</p>
+          <p><strong>Projects:</strong> ${escapeHtml(profile.projects || "To be confirmed during recruiter review.")}</p>
           <p class="redacted-note">${escapeHtml(profile.notes || "Contact details are hidden until payment is confirmed.")}</p>
         </details>
       </article>
@@ -1141,6 +1357,55 @@ function renderClientBilling() {
   paymentNote.textContent = currentShortlist.paymentComplete
     ? "Payment is marked as received for this prototype. The selected profile download is now available."
     : "Select one or more profiles. The fee is calculated as 0.5% of the annual gross pay per selected profile.";
+}
+
+function renderDeletedProfiles() {
+  const list = document.querySelector("#deleted-profile-list");
+  if (!list) return;
+
+  if (!deletedProfiles.length) {
+    list.innerHTML = `<article class="deleted-card"><p class="meta">No deleted or rejected profiles yet.</p></article>`;
+    return;
+  }
+
+  list.innerHTML = deletedProfiles.map((profile) => `
+    <article class="deleted-card">
+      <div class="profile-card-top">
+        <div>
+          <h3>${escapeHtml(profile.name)}</h3>
+          <div class="meta">${escapeHtml(profile.role)} / ${escapeHtml(profile.location)} / ${escapeHtml(profile.experience)}</div>
+        </div>
+        <span class="status-pill">${escapeHtml(profile.reason)}</span>
+      </div>
+      <p>${escapeHtml(profile.summary)}</p>
+      <div class="summary-grid">
+        <span>Source</span><strong>${escapeHtml(profile.source)}</strong>
+        <span>Words</span><strong>${escapeHtml(profile.wordCount)}</strong>
+        <span>Deleted</span><strong>${escapeHtml(profile.deletedAt)}</strong>
+        <span>Purge date</span><strong>${escapeHtml(profile.deleteAfter)}</strong>
+      </div>
+      <div class="private-line">Private: ${escapeHtml(profile.contact)}</div>
+      <p class="meta">${escapeHtml(profile.notes)}</p>
+    </article>
+  `).join("");
+}
+
+async function purgeExpiredDeletedProfiles() {
+  const client = getSupabaseClient();
+  if (!client || !supabaseSession) {
+    showToast("Sign in to purge expired deleted profiles.");
+    return;
+  }
+
+  const { data, error } = await client.rpc("purge_expired_deleted_profiles");
+  if (error) {
+    showToast("Could not purge expired profiles. Run the latest migration SQL first.");
+    return;
+  }
+
+  await loadSupabaseData();
+  renderAll();
+  showToast(`${data || 0} expired deleted profile${data === 1 ? "" : "s"} permanently removed`);
 }
 
 function downloadSelectedClientProfiles() {
@@ -1320,6 +1585,7 @@ function renderAll() {
   renderSelectableProfiles();
   renderShortlistOutput();
   renderClientPreview();
+  renderDeletedProfiles();
 }
 
 navItems.forEach((item) => {
@@ -1360,10 +1626,22 @@ document.querySelector("#profile-upload-input").addEventListener("change", (even
 
 clientPaymentButton.addEventListener("click", handleClientPaymentOrDownload);
 
+document.querySelector("#organization-select").addEventListener("change", (event) => {
+  selectRequestForShortlist(event.target.value);
+});
+
+document.querySelector("#purge-deleted").addEventListener("click", purgeExpiredDeletedProfiles);
+
 document.querySelector("#generate-shortlist").addEventListener("click", async () => {
   const requestId = document.querySelector("#organization-select").value;
   const relatedRequest = requests.find((request) => String(request.id) === String(requestId));
   const organization = relatedRequest?.organization || "Selected organization";
+
+  if (!selectedProfileIds.length) {
+    showToast("Push and select at least one profile for this organization first.");
+    return;
+  }
+
   if (relatedRequest) {
     relatedRequest.viewed = true;
     relatedRequest.intakeComplete = true;

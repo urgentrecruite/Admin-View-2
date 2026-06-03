@@ -2,6 +2,8 @@
 
 Use `SUPABASE_SETUP.sql` in the Supabase SQL Editor first.
 
+If you already ran the first setup before the UX/profile review update, run `SUPABASE_MIGRATION_UX_PROFILE_REVIEW.sql` once as well.
+
 ## Steps
 
 1. Open your Supabase project.
@@ -12,6 +14,16 @@ Use `SUPABASE_SETUP.sql` in the Supabase SQL Editor first.
 6. Create an admin user for yourself.
 7. Deploy the admin and landing page again.
 8. Open the admin page and sign in with the admin user.
+
+## Follow-up Migration
+
+Run `SUPABASE_MIGRATION_UX_PROFILE_REVIEW.sql` after the original setup. It adds:
+
+- `deleted_profiles`
+- `request_profiles`
+- `profiles.word_count`
+- the 90-day purge helper
+- a safer public shortlist function that uses profile numbers instead of candidate names
 
 ## Static Website Setup
 

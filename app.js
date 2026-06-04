@@ -101,6 +101,7 @@ let profiles = [
 let selectedProfileIds = [];
 let activeProfileId = 101;
 let deletedProfiles = [];
+let selectedDeletedProfileIds = [];
 let currentShortlist = {
   token: "sl-acme-7f42",
   requestId: 1,
@@ -298,7 +299,17 @@ function mapSupabaseProfile(row) {
     notes: row.notes || (row.cv_file_name ? `Uploaded file: ${row.cv_file_name}` : "Saved in Supabase"),
     cvFilePath: row.cv_file_path || "",
     cvFileName: row.cv_file_name || "",
-    wordCount: row.word_count || 0
+    wordCount: row.word_count || 0,
+    parseStatus: row.parse_status || "pending",
+    parserError: row.parser_error || "",
+    parsedAt: row.parsed_at ? toIsoDateLabel(row.parsed_at) : "",
+    atsScore: row.ats_score || 0,
+    experienceDetails: row.experience_details || "",
+    certifications: row.certifications || "",
+    projects: row.projects || "",
+    education: row.education || "",
+    achievements: row.achievements || "",
+    cvTextExcerpt: row.cv_text_excerpt || ""
   };
 }
 
@@ -338,7 +349,17 @@ function mapDeletedProfile(row) {
     reason: row.deletion_reason || "Deleted from admin",
     wordCount: row.word_count || 0,
     deletedAt: toIsoDateLabel(row.deleted_at || row.created_at),
-    deleteAfter: toIsoDateLabel(row.delete_after)
+    deleteAfter: toIsoDateLabel(row.delete_after),
+    parseStatus: row.parse_status || "rejected",
+    parserError: row.parser_error || "",
+    atsScore: row.ats_score || 0,
+    experienceDetails: row.experience_details || "",
+    certifications: row.certifications || "",
+    projects: row.projects || "",
+    education: row.education || "",
+    achievements: row.achievements || "",
+    cvFileName: row.cv_file_name || "",
+    cvFilePath: row.cv_file_path || ""
   };
 }
 
@@ -359,7 +380,16 @@ function profileToSupabaseRow(profile) {
     notes: profile.notes || "",
     cv_file_name: profile.cvFileName || "",
     cv_file_path: profile.cvFilePath || "",
-    word_count: profile.wordCount || countWords(profile.summary)
+    word_count: profile.wordCount || 0,
+    parse_status: profile.parseStatus || (profile.cvFilePath ? "pending" : "failed"),
+    parser_error: profile.parserError || "",
+    ats_score: profile.atsScore || 0,
+    experience_details: profile.experienceDetails || "",
+    certifications: profile.certifications || "",
+    projects: profile.projects || "",
+    education: profile.education || "",
+    achievements: profile.achievements || "",
+    cv_text_excerpt: profile.cvTextExcerpt || ""
   };
 }
 
@@ -433,6 +463,12 @@ function profileMatchesFilters(profile) {
     profile.location,
     profile.experience,
     profile.summary,
+    profile.experienceDetails,
+    profile.certifications,
+    profile.projects,
+    profile.education,
+    profile.achievements,
+    profile.cvTextExcerpt,
     profile.notes,
     profile.skills.join(" ")
   ].join(" ").toLowerCase();
@@ -441,6 +477,26 @@ function profileMatchesFilters(profile) {
     && (!filters.location || profile.location.toLowerCase().includes(filters.location))
     && (!filters.experience || profile.experience.toLowerCase().includes(filters.experience))
     && (!filters.keyword || searchable.includes(filters.keyword));
+}
+
+function getParseStatusLabel(profile) {
+  if (!profile.cvFilePath && !profile.parseStatus) return "No CV file";
+  const status = String(profile.parseStatus || "pending").toLowerCase();
+  if (status === "parsed") return "Parsed";
+  if (status === "processing") return "Parsing";
+  if (status === "rejected") return "Rejected";
+  if (status === "failed") return "Parse failed";
+  return "Pending parse";
+}
+
+function getParseStatusClass(profile) {
+  if (!profile.cvFilePath && !profile.parseStatus) return "pending";
+  const status = String(profile.parseStatus || "pending").toLowerCase();
+  if (status === "parsed") return "parsed";
+  if (status === "processing") return "processing";
+  if (status === "rejected") return "failed";
+  if (status === "failed") return "failed";
+  return "pending";
 }
 
 function loadFrontendSubmissions() {
@@ -784,7 +840,17 @@ async function moveProfileToDeleted(profileId, reason = "Deleted from admin") {
     reason,
     wordCount: profile.wordCount || countWords(profile.summary),
     deletedAt: new Date().toLocaleDateString(),
-    deleteAfter: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toLocaleDateString()
+    deleteAfter: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toLocaleDateString(),
+    parseStatus: profile.parseStatus || "rejected",
+    parserError: profile.parserError || "",
+    atsScore: profile.atsScore || 0,
+    experienceDetails: profile.experienceDetails || "",
+    certifications: profile.certifications || "",
+    projects: profile.projects || "",
+    education: profile.education || "",
+    achievements: profile.achievements || "",
+    cvFileName: profile.cvFileName || "",
+    cvFilePath: profile.cvFilePath || ""
   };
 
   const client = getSupabaseClient();
@@ -803,7 +869,18 @@ async function moveProfileToDeleted(profileId, reason = "Deleted from admin") {
       contact_details: profile.contact,
       notes: profile.notes,
       deletion_reason: reason,
-      delete_after: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString()
+      delete_after: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString(),
+      cv_file_name: profile.cvFileName || "",
+      cv_file_path: profile.cvFilePath || "",
+      parse_status: profile.parseStatus || "rejected",
+      parser_error: profile.parserError || "",
+      ats_score: profile.atsScore || 0,
+      experience_details: profile.experienceDetails || "",
+      certifications: profile.certifications || "",
+      projects: profile.projects || "",
+      education: profile.education || "",
+      achievements: profile.achievements || "",
+      cv_text_excerpt: profile.cvTextExcerpt || ""
     });
 
     if (insertError) {
@@ -830,6 +907,70 @@ async function moveProfileToDeleted(profileId, reason = "Deleted from admin") {
   showToast("Profile moved to deleted bucket");
 }
 
+async function parseProfileCv(profileId) {
+  const profile = profiles.find((item) => String(item.id) === String(profileId));
+  if (!profile) return false;
+
+  const client = getSupabaseClient();
+  if (!client || !supabaseSession) {
+    showToast("Sign in to parse CV files.");
+    return false;
+  }
+
+  if (!profile.cvFilePath) {
+    showToast("No CV file is attached to this profile.");
+    return false;
+  }
+
+  profile.parseStatus = "processing";
+  renderProfiles();
+  renderProfileSummary();
+  showToast(`Parsing CV for ${profile.name}...`);
+
+  const { data, error } = await client.functions.invoke("parse-profile", {
+    body: { profileId: profile.id }
+  });
+
+  if (error) {
+    profile.parseStatus = "failed";
+    profile.parserError = error.message || "CV parsing failed.";
+    renderProfiles();
+    renderProfileSummary();
+    showToast("CV parser failed. Check Edge Function deployment and secrets.");
+    return false;
+  }
+
+  await loadSupabaseData();
+  renderAll();
+
+  if (data?.status === "rejected") {
+    showToast(`Rejected: CV has ${data.wordCount || 0} words, below the ${data.minimumWords || 200}-word minimum.`);
+  } else {
+    showToast(`CV parsed: ${data?.wordCount || 0} words, ATS ${data?.atsScore || 0}/100.`);
+  }
+
+  return true;
+}
+
+async function parsePendingProfiles() {
+  const pending = profiles.filter((profile) =>
+    profile.cvFilePath && !["parsed", "processing"].includes(String(profile.parseStatus || "pending").toLowerCase())
+  );
+
+  if (!pending.length) {
+    showToast("No pending CVs to parse.");
+    return;
+  }
+
+  let parsedCount = 0;
+  for (const profile of pending) {
+    const parsed = await parseProfileCv(profile.id);
+    if (parsed) parsedCount += 1;
+  }
+
+  showToast(`${parsedCount} pending CV${parsedCount === 1 ? "" : "s"} processed.`);
+}
+
 function renderProfiles() {
   const profileList = document.querySelector("#profile-list");
   const duplicateIds = getDuplicateIds();
@@ -851,6 +992,7 @@ function renderProfiles() {
         </div>
         <div class="profile-actions compact">
           <button class="ghost-button small profile-open" type="button" data-profile-id="${profile.id}">Open</button>
+          <button class="ghost-button small profile-parse" type="button" data-profile-id="${profile.id}" ${profile.cvFilePath ? "" : "disabled"}>Parse CV</button>
           <button class="danger-button small profile-delete" type="button" data-profile-id="${profile.id}">Delete</button>
         </div>
       </div>
@@ -858,6 +1000,8 @@ function renderProfiles() {
       <div class="flag-list">
         ${profile.source === "intent" ? `<span class="flag intent">Intern</span>` : ""}
         ${duplicateIds.has(profile.id) ? `<span class="flag duplicate">Duplicate</span>` : ""}
+        <span class="flag ${getParseStatusClass(profile)}">${escapeHtml(getParseStatusLabel(profile))}</span>
+        ${profile.wordCount ? `<span class="flag cv">${escapeHtml(profile.wordCount)} CV words</span>` : ""}
       </div>
       <div class="private-line">Private: ${escapeHtml(profile.contact)}</div>
       <div class="push-row">
@@ -880,6 +1024,12 @@ function renderProfiles() {
   profileList.querySelectorAll(".profile-delete").forEach((button) => {
     button.addEventListener("click", async () => {
       await moveProfileToDeleted(button.dataset.profileId, "Deleted by admin");
+    });
+  });
+
+  profileList.querySelectorAll(".profile-parse").forEach((button) => {
+    button.addEventListener("click", async () => {
+      await parseProfileCv(button.dataset.profileId);
     });
   });
 
@@ -1034,6 +1184,8 @@ async function normalizeUploadedFileProfile(file, index) {
     notes: `Uploaded file: ${file.name} (${formatFileSize(file.size)})`,
     cvFileName: file.name,
     cvFilePath: "",
+    wordCount: 0,
+    parseStatus: "pending",
     _fileObject: file
   };
 }
@@ -1054,7 +1206,15 @@ function normalizeUploadedProfile(profile, index) {
     contact: profile.contact || [profile.email, profile.phone, profile.linkedin].filter(Boolean).join(" / ") || "No contact details provided",
     notes: profile.notes || "Uploaded from admin",
     cvFileName: profile.cvFileName || profile.cv_file_name || "",
-    cvFilePath: profile.cvFilePath || profile.cv_file_path || ""
+    cvFilePath: profile.cvFilePath || profile.cv_file_path || "",
+    wordCount: profile.wordCount || profile.word_count || 0,
+    parseStatus: profile.parseStatus || profile.parse_status || "pending",
+    atsScore: profile.atsScore || profile.ats_score || 0,
+    experienceDetails: profile.experienceDetails || profile.experience_details || "",
+    certifications: profile.certifications || "",
+    projects: profile.projects || "",
+    education: profile.education || "",
+    achievements: profile.achievements || ""
   };
 }
 
@@ -1170,8 +1330,16 @@ function renderProfileSummary() {
   }
 
   const duplicateIds = getDuplicateIds();
+  const parsedDetailBlocks = [
+    ["Experience details", profile.experienceDetails],
+    ["Certifications", profile.certifications],
+    ["Projects", profile.projects],
+    ["Education", profile.education],
+    ["Achievements", profile.achievements]
+  ].filter(([, value]) => value);
+
   summary.innerHTML = `
-    <p class="eyebrow">Selected profile</p>
+    <p class="eyebrow">AI English summary</p>
     <h3>${escapeHtml(profile.name)}</h3>
     <p class="meta">${escapeHtml(profile.role)} / ${escapeHtml(profile.location)} / ${escapeHtml(profile.experience)}</p>
     <p>${escapeHtml(profile.summary)}</p>
@@ -1179,14 +1347,35 @@ function renderProfileSummary() {
       <span>Source</span><strong>${profile.source === "intent" ? "Intern" : "CV submit"}</strong>
       <span>Duplicate</span><strong>${duplicateIds.has(profile.id) ? "Yes" : "No"}</strong>
       <span>Submitted</span><strong>${escapeHtml(profile.submittedAt)}</strong>
+      <span>Parser</span><strong>${escapeHtml(getParseStatusLabel(profile))}</strong>
+      <span>CV words</span><strong>${escapeHtml(profile.wordCount || 0)}</strong>
+      <span>ATS score</span><strong>${escapeHtml(profile.atsScore ? `${profile.atsScore}/100` : "Pending")}</strong>
     </div>
+    ${profile.parserError ? `<p class="parser-error">${escapeHtml(profile.parserError)}</p>` : ""}
+    ${parsedDetailBlocks.length ? `
+      <div class="parsed-profile-detail">
+        ${parsedDetailBlocks.map(([label, value]) => `
+          <section>
+            <h4>${escapeHtml(label)}</h4>
+            <p>${escapeHtml(value)}</p>
+          </section>
+        `).join("")}
+      </div>
+    ` : ""}
     <div class="private-line">Admin contact: ${escapeHtml(profile.contact)}</div>
     <p class="meta">${escapeHtml(profile.notes)}</p>
-    <button class="primary-button small" type="button" id="summary-open-cv">${profile.cvFilePath ? "Open CV file" : "Open profile summary"}</button>
+    <div class="summary-actions">
+      <button class="primary-button small" type="button" id="summary-open-cv">${profile.cvFilePath ? "Open CV file" : "Open profile summary"}</button>
+      <button class="ghost-button small" type="button" id="summary-parse-cv" ${profile.cvFilePath ? "" : "disabled"}>Parse CV</button>
+    </div>
   `;
 
   document.querySelector("#summary-open-cv")?.addEventListener("click", () => {
     openCvForProfile(profile.id);
+  });
+
+  document.querySelector("#summary-parse-cv")?.addEventListener("click", () => {
+    parseProfileCv(profile.id);
   });
 }
 
@@ -1359,35 +1548,102 @@ function renderClientBilling() {
     : "Select one or more profiles. The fee is calculated as 0.5% of the annual gross pay per selected profile.";
 }
 
+function getDeletedFilterValue() {
+  return document.querySelector("#deleted-filter")?.value || "all";
+}
+
+function isLowWordDeletedProfile(profile) {
+  const reason = String(profile.reason || "").toLowerCase();
+  const wordCount = Number(profile.wordCount || 0);
+  return (wordCount > 0 && wordCount < 200)
+    || reason.includes("fewer than")
+    || reason.includes("less than")
+    || reason.includes("below");
+}
+
+function deletedProfileMatchesFilter(profile) {
+  const filter = getDeletedFilterValue();
+  const reason = String(profile.reason || "").toLowerCase();
+  const status = String(profile.parseStatus || "").toLowerCase();
+
+  if (filter === "low-word") return isLowWordDeletedProfile(profile);
+  if (filter === "admin") return reason.includes("admin") || reason.includes("manual");
+  if (filter === "failed") return status === "failed" || reason.includes("failed");
+  return true;
+}
+
+function updateDeletedSelectionCount() {
+  const count = selectedDeletedProfileIds.length;
+  const output = document.querySelector("#deleted-selected-count");
+  if (output) output.textContent = `${count} selected`;
+}
+
 function renderDeletedProfiles() {
   const list = document.querySelector("#deleted-profile-list");
   if (!list) return;
 
-  if (!deletedProfiles.length) {
+  const visibleDeletedProfiles = deletedProfiles.filter(deletedProfileMatchesFilter);
+  selectedDeletedProfileIds = selectedDeletedProfileIds.filter((id) =>
+    visibleDeletedProfiles.some((profile) => String(profile.id) === String(id))
+  );
+  updateDeletedSelectionCount();
+
+  if (!visibleDeletedProfiles.length) {
     list.innerHTML = `<article class="deleted-card"><p class="meta">No deleted or rejected profiles yet.</p></article>`;
     return;
   }
 
-  list.innerHTML = deletedProfiles.map((profile) => `
-    <article class="deleted-card">
-      <div class="profile-card-top">
-        <div>
-          <h3>${escapeHtml(profile.name)}</h3>
-          <div class="meta">${escapeHtml(profile.role)} / ${escapeHtml(profile.location)} / ${escapeHtml(profile.experience)}</div>
+  list.innerHTML = visibleDeletedProfiles.map((profile) => {
+    const parsedDetailBlocks = [
+      ["Experience", profile.experienceDetails],
+      ["Certifications", profile.certifications],
+      ["Projects", profile.projects]
+    ].filter(([, value]) => value);
+    const isSelected = selectedDeletedProfileIds.some((id) => String(id) === String(profile.id));
+
+    return `
+      <article class="deleted-card ${isSelected ? "selected" : ""}">
+        <div class="profile-card-top">
+          <label class="deleted-select-row">
+            <input type="checkbox" class="deleted-select" data-deleted-id="${escapeHtml(profile.id)}" ${isSelected ? "checked" : ""}>
+            <span>
+              <strong>${escapeHtml(profile.name)}</strong>
+              <span class="meta">${escapeHtml(profile.role)} / ${escapeHtml(profile.location)} / ${escapeHtml(profile.experience)}</span>
+            </span>
+          </label>
+          <span class="status-pill">${escapeHtml(profile.reason)}</span>
         </div>
-        <span class="status-pill">${escapeHtml(profile.reason)}</span>
-      </div>
-      <p>${escapeHtml(profile.summary)}</p>
-      <div class="summary-grid">
-        <span>Source</span><strong>${escapeHtml(profile.source)}</strong>
-        <span>Words</span><strong>${escapeHtml(profile.wordCount)}</strong>
-        <span>Deleted</span><strong>${escapeHtml(profile.deletedAt)}</strong>
-        <span>Purge date</span><strong>${escapeHtml(profile.deleteAfter)}</strong>
-      </div>
-      <div class="private-line">Private: ${escapeHtml(profile.contact)}</div>
-      <p class="meta">${escapeHtml(profile.notes)}</p>
-    </article>
-  `).join("");
+        <p>${escapeHtml(profile.summary)}</p>
+        <div class="summary-grid">
+          <span>Source</span><strong>${escapeHtml(profile.source)}</strong>
+          <span>Words</span><strong>${escapeHtml(profile.wordCount)}</strong>
+          <span>ATS score</span><strong>${escapeHtml(profile.atsScore ? `${profile.atsScore}/100` : "Pending")}</strong>
+          <span>Deleted</span><strong>${escapeHtml(profile.deletedAt)}</strong>
+          <span>Purge date</span><strong>${escapeHtml(profile.deleteAfter)}</strong>
+        </div>
+        ${parsedDetailBlocks.length ? `
+          <details class="client-profile-detail">
+            <summary>Open parser details</summary>
+            ${parsedDetailBlocks.map(([label, value]) => `<p><strong>${escapeHtml(label)}:</strong> ${escapeHtml(value)}</p>`).join("")}
+          </details>
+        ` : ""}
+        <div class="private-line">Private: ${escapeHtml(profile.contact)}</div>
+        <p class="meta">${escapeHtml(profile.notes)}</p>
+      </article>
+    `;
+  }).join("");
+
+  list.querySelectorAll(".deleted-select").forEach((checkbox) => {
+    checkbox.addEventListener("change", () => {
+      const id = checkbox.dataset.deletedId;
+      if (checkbox.checked) {
+        selectedDeletedProfileIds = [...new Set([...selectedDeletedProfileIds, id])];
+      } else {
+        selectedDeletedProfileIds = selectedDeletedProfileIds.filter((profileId) => String(profileId) !== String(id));
+      }
+      renderDeletedProfiles();
+    });
+  });
 }
 
 async function purgeExpiredDeletedProfiles() {
@@ -1406,6 +1662,43 @@ async function purgeExpiredDeletedProfiles() {
   await loadSupabaseData();
   renderAll();
   showToast(`${data || 0} expired deleted profile${data === 1 ? "" : "s"} permanently removed`);
+}
+
+function selectVisibleDeletedProfiles() {
+  selectedDeletedProfileIds = deletedProfiles
+    .filter(deletedProfileMatchesFilter)
+    .map((profile) => profile.id);
+  renderDeletedProfiles();
+}
+
+async function deleteSelectedDeletedProfiles() {
+  if (!selectedDeletedProfileIds.length) {
+    showToast("Select one or more deleted profiles first.");
+    return;
+  }
+
+  const confirmed = window.confirm(`Permanently delete ${selectedDeletedProfileIds.length} selected deleted profile${selectedDeletedProfileIds.length === 1 ? "" : "s"} now?`);
+  if (!confirmed) return;
+
+  const idsToDelete = selectedDeletedProfileIds.map(String);
+  const client = getSupabaseClient();
+
+  if (client && supabaseSession) {
+    const uuidIds = idsToDelete.filter(isUuid);
+    if (uuidIds.length) {
+      const { error } = await client.from("deleted_profiles").delete().in("id", uuidIds);
+      if (error) {
+        showToast("Could not permanently delete selected profiles.");
+        return;
+      }
+    }
+    await loadSupabaseData();
+  }
+
+  deletedProfiles = deletedProfiles.filter((profile) => !idsToDelete.includes(String(profile.id)));
+  selectedDeletedProfileIds = [];
+  renderAll();
+  showToast("Selected deleted profiles permanently removed.");
 }
 
 function downloadSelectedClientProfiles() {
@@ -1615,6 +1908,8 @@ document.querySelector("#clear-filters").addEventListener("click", () => {
 
 document.querySelector("#topbar-download-profiles").addEventListener("click", downloadProfiles);
 
+document.querySelector("#topbar-parse-pending").addEventListener("click", parsePendingProfiles);
+
 document.querySelector("#topbar-upload-profiles").addEventListener("click", () => {
   document.querySelector("#profile-upload-input").click();
 });
@@ -1631,6 +1926,12 @@ document.querySelector("#organization-select").addEventListener("change", (event
 });
 
 document.querySelector("#purge-deleted").addEventListener("click", purgeExpiredDeletedProfiles);
+document.querySelector("#deleted-filter").addEventListener("change", () => {
+  selectedDeletedProfileIds = [];
+  renderDeletedProfiles();
+});
+document.querySelector("#select-visible-deleted").addEventListener("click", selectVisibleDeletedProfiles);
+document.querySelector("#delete-selected-deleted").addEventListener("click", deleteSelectedDeletedProfiles);
 
 document.querySelector("#generate-shortlist").addEventListener("click", async () => {
   const requestId = document.querySelector("#organization-select").value;

@@ -18,6 +18,16 @@ create table if not exists public.profiles (
   notes text,
   cv_file_name text,
   cv_file_path text,
+  parse_status text not null default 'pending' check (parse_status in ('pending', 'processing', 'parsed', 'rejected', 'failed')),
+  parsed_at timestamptz,
+  parser_error text,
+  ats_score integer not null default 0,
+  experience_details text,
+  certifications text,
+  projects text,
+  education text,
+  achievements text,
+  cv_text_excerpt text,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -71,6 +81,17 @@ create table if not exists public.deleted_profiles (
   word_count integer not null default 0,
   contact_details text,
   notes text,
+  cv_file_name text,
+  cv_file_path text,
+  parse_status text not null default 'rejected' check (parse_status in ('pending', 'processing', 'parsed', 'rejected', 'failed')),
+  parser_error text,
+  ats_score integer not null default 0,
+  experience_details text,
+  certifications text,
+  projects text,
+  education text,
+  achievements text,
+  cv_text_excerpt text,
   deletion_reason text not null default 'Deleted from admin',
   deleted_at timestamptz not null default now(),
   delete_after timestamptz not null default (now() + interval '90 days')
@@ -328,6 +349,9 @@ as $$
       p.experience,
       p.skills,
       p.summary,
+      p.experience_details,
+      p.certifications,
+      p.projects,
       row_number() over (partition by s.id order by sp.created_at, p.created_at) as profile_number
     from public.shortlists s
     left join public.shortlist_profiles sp on sp.shortlist_id = s.id
@@ -351,9 +375,9 @@ as $$
             'experience', coalesce(experience, 'Experience not provided'),
             'skills', coalesce(to_jsonb(skills), '[]'::jsonb),
             'summary', coalesce(summary, 'Relevant experience summary is being prepared.'),
-            'experienceDetails', coalesce(summary, 'Experience details will be expanded after recruiter review.'),
-            'certifications', 'To be confirmed during recruiter review.',
-            'projects', 'To be confirmed during recruiter review.',
+            'experienceDetails', coalesce(experience_details, summary, 'Experience details will be expanded after recruiter review.'),
+            'certifications', coalesce(certifications, 'To be confirmed during recruiter review.'),
+            'projects', coalesce(projects, 'To be confirmed during recruiter review.'),
             'notes', 'Contact details are hidden until payment is confirmed.'
           )
         ) filter (where profile_id is not null),

@@ -44,6 +44,7 @@
           <div class="topbar-actions" id="topbar-actions">
             <button class="primary-button topbar-action" id="open-builder" data-visible-section="dashboard">Build shortlist</button>
             <button class="ghost-button topbar-action" id="topbar-upload-profiles" data-visible-section="profiles" type="button">Upload</button>
+            <button class="ghost-button topbar-action" id="topbar-parse-pending" data-visible-section="profiles" type="button">Parse pending</button>
             <button class="primary-button topbar-action" id="topbar-download-profiles" data-visible-section="profiles" type="button">Download</button>
             <button class="primary-button topbar-action" id="copy-link" data-visible-section="preview">Copy client link</button>
             <button class="ghost-button" id="sign-out" type="button" hidden>Sign out</button>
@@ -229,7 +230,22 @@
                 <p class="eyebrow">90-day review bucket</p>
                 <h2>Deleted and rejected profiles</h2>
               </div>
-              <button class="danger-button small" id="purge-deleted" type="button">Purge expired</button>
+              <div class="profile-actions compact">
+                <button class="ghost-button small" id="select-visible-deleted" type="button">Select visible</button>
+                <button class="danger-button small" id="delete-selected-deleted" type="button">Delete selected now</button>
+                <button class="danger-button small" id="purge-deleted" type="button">Purge expired</button>
+              </div>
+            </div>
+            <div class="deleted-controls">
+              <label>Filter deleted profiles
+                <select id="deleted-filter">
+                  <option value="all">All deleted profiles</option>
+                  <option value="low-word">CV parser below review threshold</option>
+                  <option value="admin">Deleted manually by admin</option>
+                  <option value="failed">Parser failed</option>
+                </select>
+              </label>
+              <span id="deleted-selected-count">0 selected</span>
             </div>
             <div class="share-box">
               <p>Profiles rejected by the 200-word screening rule or deleted from the admin stay here for review before permanent removal.</p>

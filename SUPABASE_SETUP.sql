@@ -348,7 +348,7 @@ as $$
       p.location,
       p.experience,
       p.skills,
-      p.summary,
+      p.cv_text_excerpt,
       p.experience_details,
       p.certifications,
       p.projects,
@@ -369,13 +369,14 @@ as $$
         jsonb_agg(
           jsonb_build_object(
             'id', profile_id,
+            'safeForClient', true,
             'name', concat('Profile ', profile_number),
             'role', coalesce(role, 'Candidate profile'),
             'location', coalesce(location, 'Location not provided'),
             'experience', coalesce(experience, 'Experience not provided'),
             'skills', coalesce(to_jsonb(skills), '[]'::jsonb),
-            'summary', coalesce(summary, 'Relevant experience summary is being prepared.'),
-            'experienceDetails', coalesce(experience_details, summary, 'Experience details will be expanded after recruiter review.'),
+            'summary', coalesce(experience_details, cv_text_excerpt, 'Professional profile summary is being prepared by the recruitment team.'),
+            'experienceDetails', coalesce(experience_details, cv_text_excerpt, 'Experience details will be expanded after recruiter review.'),
             'certifications', coalesce(certifications, 'To be confirmed during recruiter review.'),
             'projects', coalesce(projects, 'To be confirmed during recruiter review.'),
             'notes', 'Contact details are hidden until payment is confirmed.'

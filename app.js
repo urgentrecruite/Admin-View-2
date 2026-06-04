@@ -213,16 +213,32 @@ function getGrossPayBasis() {
   return Number(currentShortlist.annualGrossPay || relatedRequest?.annualGrossPay || 0);
 }
 
+function getClientSafeSummary(profile) {
+  const hasParsedContent = ["parsed", "reviewed"].includes(String(profile.parseStatus || "").toLowerCase())
+    || Boolean(profile.experienceDetails || profile.certifications || profile.projects || profile.cvTextExcerpt);
+
+  if (!hasParsedContent) {
+    return "Professional profile summary is being prepared by the recruitment team.";
+  }
+
+  return profile.experienceDetails
+    || profile.cvTextExcerpt
+    || "Professional experience summary is being prepared by the recruitment team.";
+}
+
 function redactProfile(profile, index = 0) {
+  const safeSummary = getClientSafeSummary(profile);
+
   return {
     id: profile.id,
+    safeForClient: true,
     name: `Profile ${index + 1}`,
     role: profile.role,
     location: profile.location,
     experience: profile.experience,
     skills: profile.skills,
-    summary: profile.summary || "Relevant experience summary is being prepared.",
-    experienceDetails: profile.experienceDetails || profile.summary || "Experience details will be expanded after CV parsing.",
+    summary: safeSummary,
+    experienceDetails: profile.experienceDetails || safeSummary,
     certifications: profile.certifications || "Certifications will be extracted during recruiter review.",
     projects: profile.projects || "Projects will be extracted during recruiter review.",
     notes: "Contact details are hidden until payment is confirmed."
@@ -1487,6 +1503,20 @@ function renderClientPreview() {
   clientProfiles.innerHTML = redactedProfiles.map((profile, index) => {
     const isSelected = selectedIds.has(String(profile.id));
     const profileLabel = `Profile ${index + 1}`;
+    const clientReady = profile.safeForClient === true;
+    const safeSummary = clientReady
+      ? profile.summary || "Professional profile summary is being prepared by the recruitment team."
+      : "Professional profile summary is being prepared by the recruitment team.";
+    const safeExperience = clientReady
+      ? profile.experienceDetails || safeSummary
+      : "Experience details will be expanded after recruiter review.";
+    const safeCertifications = clientReady
+      ? profile.certifications || "To be confirmed during recruiter review."
+      : "To be confirmed during recruiter review.";
+    const safeProjects = clientReady
+      ? profile.projects || "To be confirmed during recruiter review."
+      : "To be confirmed during recruiter review.";
+
     return `
       <article class="client-card ${isSelected ? "selected" : ""}">
         <label class="client-select-row">
@@ -1496,13 +1526,13 @@ function renderClientPreview() {
             <span class="meta">${escapeHtml(profile.role)} / ${escapeHtml(profile.location)} / ${escapeHtml(profile.experience)}</span>
           </span>
         </label>
-        <p>${escapeHtml(profile.summary || "Relevant experience summary is being prepared.")}</p>
+        <p>${escapeHtml(safeSummary)}</p>
         <div class="tag-list">${(profile.skills || []).map((skill) => `<span class="tag">${escapeHtml(skill)}</span>`).join("")}</div>
         <details class="client-profile-detail">
           <summary>Open redacted profile</summary>
-          <p><strong>Experience:</strong> ${escapeHtml(profile.experienceDetails || profile.summary || "Experience summary not available yet.")}</p>
-          <p><strong>Certifications:</strong> ${escapeHtml(profile.certifications || "To be confirmed during recruiter review.")}</p>
-          <p><strong>Projects:</strong> ${escapeHtml(profile.projects || "To be confirmed during recruiter review.")}</p>
+          <p><strong>Experience:</strong> ${escapeHtml(safeExperience)}</p>
+          <p><strong>Certifications:</strong> ${escapeHtml(safeCertifications)}</p>
+          <p><strong>Projects:</strong> ${escapeHtml(safeProjects)}</p>
           <p class="redacted-note">${escapeHtml(profile.notes || "Contact details are hidden until payment is confirmed.")}</p>
         </details>
       </article>

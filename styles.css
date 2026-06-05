@@ -674,6 +674,13 @@ button:disabled {
   color: #c6d8d7;
 }
 
+.client-link-id {
+  margin-top: 10px;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0;
+}
+
 .client-hero h2 {
   margin-bottom: 8px;
   font-size: 26px;

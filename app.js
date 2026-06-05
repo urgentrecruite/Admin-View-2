@@ -105,9 +105,11 @@ let selectedDeletedProfileIds = [];
 let currentShortlist = {
   token: "sl-acme-7f42",
   requestId: 1,
+  accessMode: "standard",
   organization: "Acme Healthcare",
   title: "Operations Manager shortlist",
   annualGrossPay: 85000,
+  feeRate: 0.005,
   profileIds: [],
   clientSelectedProfileIds: [],
   paymentComplete: false,
@@ -208,6 +210,25 @@ function getRelatedRequestForShortlist() {
     || null;
 }
 
+function isFreeInternRequest(request) {
+  const status = String(request?.paymentStatus || request?.accessMode || "").toLowerCase();
+  const role = String(request?.role || request?.title || "").toLowerCase();
+  return status === "free_intern"
+    || status === "intern"
+    || status === "free-intern"
+    || role.includes("intern shortlist")
+    || role.includes("internship");
+}
+
+function getShortlistAccessMode() {
+  if (currentShortlist.accessMode) return currentShortlist.accessMode;
+  return isFreeInternRequest(getRelatedRequestForShortlist()) ? "intern" : "standard";
+}
+
+function isInternShortlist() {
+  return getShortlistAccessMode() === "intern";
+}
+
 function getGrossPayBasis() {
   const relatedRequest = getRelatedRequestForShortlist();
   return Number(currentShortlist.annualGrossPay || relatedRequest?.annualGrossPay || 0);
@@ -242,6 +263,39 @@ function redactProfile(profile, index = 0) {
     certifications: profile.certifications || "Certifications will be extracted during recruiter review.",
     projects: profile.projects || "Projects will be extracted during recruiter review.",
     notes: "Contact details are hidden until payment is confirmed."
+  };
+}
+
+function buildClientProfile(profile, index = 0, accessMode = getShortlistAccessMode()) {
+  if (accessMode !== "intern") {
+    return redactProfile(profile, index);
+  }
+
+  const profileSummary = profile.experienceDetails
+    || profile.cvTextExcerpt
+    || profile.summary
+    || "Intern profile summary is being prepared by the recruitment team.";
+
+  return {
+    id: profile.id,
+    safeForClient: true,
+    accessMode: "intern",
+    fullProfileAvailable: true,
+    name: profile.name,
+    role: profile.role,
+    location: profile.location,
+    experience: profile.experience,
+    skills: profile.skills,
+    summary: profileSummary,
+    experienceDetails: profile.experienceDetails || profile.cvTextExcerpt || profile.summary || profileSummary,
+    certifications: profile.certifications || "Certifications not provided.",
+    projects: profile.projects || "Projects not provided.",
+    education: profile.education || "",
+    achievements: profile.achievements || "",
+    contact: profile.contact || "Contact details not provided.",
+    cvFileName: profile.cvFileName || "",
+    cvFilePath: profile.cvFilePath || "",
+    notes: "Full intern profile shared for organization review."
   };
 }
 
@@ -347,6 +401,7 @@ function mapSupabaseRequest(row) {
     linkSharedCount: row.link_shared_count || 0,
     clientResponse: row.client_response || null,
     paymentStatus: row.payment_status || "unpaid",
+    accessMode: row.payment_status === "free_intern" ? "intern" : "standard",
     workflowState: row.workflow_state || "open"
   };
 }
@@ -448,16 +503,19 @@ async function loadSupabaseData() {
 
   if (requests.length) {
     const request = requests[0];
+    const accessMode = isFreeInternRequest(request) ? "intern" : "standard";
     selectedProfileIds = request.pushedProfileIds || [];
     currentShortlist = {
       ...currentShortlist,
       requestId: request.id,
       organization: request.organization,
       title: `${request.role} shortlist`,
+      accessMode,
       annualGrossPay: request.annualGrossPay || 0,
+      feeRate: accessMode === "intern" ? 0 : 0.005,
       profileIds: selectedProfileIds,
       clientSelectedProfileIds: [],
-      paymentComplete: false,
+      paymentComplete: accessMode === "intern",
       redactedProfiles: []
     };
   }
@@ -559,7 +617,8 @@ function loadFrontendSubmissions() {
       pushedProfileIds: [],
       linkSharedCount: 0,
       clientResponse: null,
-      paymentStatus: "unpaid"
+      paymentStatus: submission.source === "intern-request" ? "free_intern" : "unpaid",
+      accessMode: submission.source === "intern-request" ? "intern" : "standard"
     });
   });
 
@@ -608,20 +667,23 @@ function getClientVisibleProfiles() {
     return currentShortlist.redactedProfiles;
   }
 
-  return getShortlistProfiles().map(redactProfile);
+  return getShortlistProfiles().map((profile, index) => buildClientProfile(profile, index));
 }
 
 function buildSharePayload() {
   const relatedRequest = getRelatedRequestForShortlist();
-  const redactedProfiles = getShortlistProfiles().map(redactProfile);
+  const accessMode = getShortlistAccessMode();
+  const redactedProfiles = getShortlistProfiles().map((profile, index) => buildClientProfile(profile, index, accessMode));
 
   return {
     token: currentShortlist.token,
     requestId: currentShortlist.requestId || relatedRequest?.id || "",
+    accessMode,
     organization: currentShortlist.organization,
     title: currentShortlist.title,
     annualGrossPay: getGrossPayBasis(),
-    feeRate: 0.005,
+    feeRate: accessMode === "intern" ? 0 : 0.005,
+    paymentComplete: accessMode === "intern",
     profiles: redactedProfiles
   };
 }
@@ -647,8 +709,8 @@ async function saveCurrentShortlistToSupabase() {
       organization: payload.organization,
       title: payload.title,
       annual_gross_pay: payload.annualGrossPay || null,
-      fee_rate: payload.feeRate || 0.005,
-      payment_complete: false
+      fee_rate: payload.feeRate ?? 0.005,
+      payment_complete: Boolean(payload.paymentComplete)
     }, { onConflict: "token" })
     .select("id")
     .single();
@@ -698,11 +760,12 @@ async function loadPublicShortlistFromSupabase(token) {
     token: data.token,
     organization: data.organization || "Client shortlist",
     title: data.title || "Shared profiles",
+    accessMode: data.accessMode || "standard",
     annualGrossPay: Number(data.annualGrossPay || 0),
-    feeRate: Number(data.feeRate || 0.005),
+    feeRate: Number(data.feeRate ?? 0.005),
     profileIds: (data.profiles || []).map((profile) => profile.id),
     clientSelectedProfileIds: [],
-    paymentComplete: false,
+    paymentComplete: Boolean(data.paymentComplete || data.accessMode === "intern"),
     redactedProfiles: data.profiles || []
   };
 
@@ -1093,15 +1156,18 @@ async function pushProfileToRequest(profileId, requestId) {
   }
 
   selectedProfileIds = request.pushedProfileIds;
+  const accessMode = isFreeInternRequest(request) ? "intern" : "standard";
   currentShortlist = {
     ...currentShortlist,
     requestId: request.id,
     organization: request.organization,
     title: `${request.role} shortlist`,
+    accessMode,
     annualGrossPay: request.annualGrossPay || 0,
+    feeRate: accessMode === "intern" ? 0 : 0.005,
     profileIds: selectedProfileIds,
     clientSelectedProfileIds: [],
-    paymentComplete: false,
+    paymentComplete: accessMode === "intern",
     redactedProfiles: []
   };
 
@@ -1118,15 +1184,18 @@ function openNextNewRequest() {
   }
 
   request.viewed = true;
+  const accessMode = isFreeInternRequest(request) ? "intern" : "standard";
   currentShortlist = {
     ...currentShortlist,
     requestId: request.id,
     organization: request.organization,
     title: `${request.role} shortlist`,
+    accessMode,
     annualGrossPay: request.annualGrossPay || 0,
+    feeRate: accessMode === "intern" ? 0 : 0.005,
     profileIds: request.pushedProfileIds || [],
     clientSelectedProfileIds: [],
-    paymentComplete: false,
+    paymentComplete: accessMode === "intern",
     redactedProfiles: []
   };
   selectedProfileIds = currentShortlist.profileIds;
@@ -1398,7 +1467,7 @@ function renderProfileSummary() {
 function renderOrganizationOptions() {
   const select = document.querySelector("#organization-select");
   select.innerHTML = requests.map((request) => `
-    <option value="${escapeHtml(request.id)}">${escapeHtml(request.organization)} / ${escapeHtml(request.role)}</option>
+    <option value="${escapeHtml(request.id)}">${escapeHtml(request.organization)} / ${escapeHtml(request.role)}${isFreeInternRequest(request) ? " / free interns" : ""}</option>
   `).join("");
   const relatedRequest = getRelatedRequestForShortlist();
   select.value = relatedRequest?.id || requests[0]?.id || "";
@@ -1408,16 +1477,19 @@ function selectRequestForShortlist(requestId) {
   const request = requests.find((item) => String(item.id) === String(requestId));
   if (!request) return;
 
+  const accessMode = isFreeInternRequest(request) ? "intern" : "standard";
   selectedProfileIds = request.pushedProfileIds || [];
   currentShortlist = {
     ...currentShortlist,
     requestId: request.id,
     organization: request.organization,
     title: `${request.role} shortlist`,
+    accessMode,
     annualGrossPay: request.annualGrossPay || 0,
+    feeRate: accessMode === "intern" ? 0 : 0.005,
     profileIds: selectedProfileIds,
     clientSelectedProfileIds: [],
-    paymentComplete: false,
+    paymentComplete: accessMode === "intern",
     redactedProfiles: []
   };
   renderSelectableProfiles();
@@ -1486,8 +1558,13 @@ function renderClientPreview() {
   const clientProfiles = document.querySelector("#client-profiles");
   const redactedProfiles = getClientVisibleProfiles();
   const selectedIds = new Set((currentShortlist.clientSelectedProfileIds || []).map(String));
+  const internMode = isInternShortlist();
   document.querySelector("#client-title").textContent = `${currentShortlist.organization}: ${currentShortlist.title}`;
-  document.querySelector("#client-summary").textContent = `${redactedProfiles.length} redacted profiles shared for review. Contact details and direct CV files stay hidden until payment is confirmed.`;
+  document.querySelector("#client-summary").textContent = internMode
+    ? `${redactedProfiles.length} full intern profiles shared for review. Select the intern profiles you want to download.`
+    : `${redactedProfiles.length} redacted profiles shared for review. Contact details and direct CV files stay hidden until payment is confirmed.`;
+  document.querySelector("#client-link-id").textContent = `Link ID: ${currentShortlist.token || "not generated yet"}`;
+  document.querySelector(".client-hero .status-pill").textContent = internMode ? "Free intern view" : "Redacted view";
 
   if (!redactedProfiles.length) {
     clientProfiles.innerHTML = `
@@ -1502,8 +1579,9 @@ function renderClientPreview() {
 
   clientProfiles.innerHTML = redactedProfiles.map((profile, index) => {
     const isSelected = selectedIds.has(String(profile.id));
-    const profileLabel = `Profile ${index + 1}`;
-    const clientReady = profile.safeForClient === true;
+    const profileInternMode = internMode || profile.accessMode === "intern";
+    const profileLabel = profileInternMode ? profile.name || `Intern Profile ${index + 1}` : `Profile ${index + 1}`;
+    const clientReady = profileInternMode || profile.safeForClient === true;
     const safeSummary = clientReady
       ? profile.summary || "Professional profile summary is being prepared by the recruitment team."
       : "Professional profile summary is being prepared by the recruitment team.";
@@ -1516,6 +1594,12 @@ function renderClientPreview() {
     const safeProjects = clientReady
       ? profile.projects || "To be confirmed during recruiter review."
       : "To be confirmed during recruiter review.";
+    const extraInternDetails = profileInternMode ? `
+          <p><strong>Contact:</strong> ${escapeHtml(profile.contact || "Contact details not provided.")}</p>
+          ${profile.education ? `<p><strong>Education:</strong> ${escapeHtml(profile.education)}</p>` : ""}
+          ${profile.achievements ? `<p><strong>Achievements:</strong> ${escapeHtml(profile.achievements)}</p>` : ""}
+          ${profile.cvFileName ? `<p><strong>CV file:</strong> ${escapeHtml(profile.cvFileName)}</p>` : ""}
+    ` : "";
 
     return `
       <article class="client-card ${isSelected ? "selected" : ""}">
@@ -1529,10 +1613,11 @@ function renderClientPreview() {
         <p>${escapeHtml(safeSummary)}</p>
         <div class="tag-list">${(profile.skills || []).map((skill) => `<span class="tag">${escapeHtml(skill)}</span>`).join("")}</div>
         <details class="client-profile-detail">
-          <summary>Open redacted profile</summary>
+          <summary>${profileInternMode ? "Open full intern profile" : "Open redacted profile"}</summary>
           <p><strong>Experience:</strong> ${escapeHtml(safeExperience)}</p>
           <p><strong>Certifications:</strong> ${escapeHtml(safeCertifications)}</p>
           <p><strong>Projects:</strong> ${escapeHtml(safeProjects)}</p>
+          ${extraInternDetails}
           <p class="redacted-note">${escapeHtml(profile.notes || "Contact details are hidden until payment is confirmed.")}</p>
         </details>
       </article>
@@ -1557,25 +1642,28 @@ function renderClientPreview() {
 
 function renderClientBilling() {
   const selectedCount = (currentShortlist.clientSelectedProfileIds || []).length;
+  const internMode = isInternShortlist();
   const grossPay = getGrossPayBasis();
-  const feeRate = Number(currentShortlist.feeRate || 0.005);
+  const feeRate = internMode ? 0 : Number(currentShortlist.feeRate ?? 0.005);
   const feePerProfile = grossPay * feeRate;
   const totalFee = selectedCount * feePerProfile;
   const paymentNote = document.querySelector("#client-payment-note");
 
   document.querySelector("#client-selected-count").textContent = selectedCount;
-  document.querySelector("#client-gross-pay").textContent = formatMoney(grossPay);
+  document.querySelector("#client-gross-pay").textContent = internMode ? "Free" : formatMoney(grossPay);
   document.querySelector("#client-fee-per-profile").textContent = formatMoney(feePerProfile);
   document.querySelector("#client-total-fee").textContent = formatMoney(totalFee);
 
   clientPaymentButton.disabled = selectedCount === 0;
   clientPaymentButton.textContent = selectedCount
-    ? currentShortlist.paymentComplete ? "Download selected profiles" : "Make payment to unlock"
-    : "Select profiles to continue";
+    ? internMode ? "Download selected intern profiles" : currentShortlist.paymentComplete ? "Download selected profiles" : "Make payment to unlock"
+    : internMode ? "Select intern profiles to download" : "Select profiles to continue";
 
-  paymentNote.textContent = currentShortlist.paymentComplete
-    ? "Payment is marked as received for this prototype. The selected profile download is now available."
-    : "Select one or more profiles. The fee is calculated as 0.5% of the annual gross pay per selected profile.";
+  paymentNote.textContent = internMode
+    ? "This intern shortlist is free for organizations. Select one or more intern profiles to download the shared profile details."
+    : currentShortlist.paymentComplete
+      ? "Payment is marked as received for this prototype. The selected profile download is now available."
+      : "Select one or more profiles. The fee is calculated as 0.5% of the annual gross pay per selected profile.";
 }
 
 function getDeletedFilterValue() {
@@ -1748,9 +1836,10 @@ function downloadSelectedClientProfiles() {
     shortlist: {
       organization: currentShortlist.organization,
       title: currentShortlist.title,
-      paymentStatus: "paid",
+      accessMode: getShortlistAccessMode(),
+      paymentStatus: isInternShortlist() ? "free_intern" : "paid",
       selectedProfiles: selectedIds.length,
-      totalFee: selectedIds.length * getGrossPayBasis() * Number(currentShortlist.feeRate || 0.005)
+      totalFee: isInternShortlist() ? 0 : selectedIds.length * getGrossPayBasis() * Number(currentShortlist.feeRate ?? 0.005)
     },
     profiles: selectedProfiles
   };
@@ -1770,6 +1859,15 @@ function downloadSelectedClientProfiles() {
 function handleClientPaymentOrDownload() {
   if (!(currentShortlist.clientSelectedProfileIds || []).length) {
     showToast("Select at least one profile first");
+    return;
+  }
+
+  if (isInternShortlist()) {
+    const relatedRequest = getRelatedRequestForShortlist();
+    if (relatedRequest) {
+      relatedRequest.clientResponse = "responded";
+    }
+    downloadSelectedClientProfiles();
     return;
   }
 
@@ -1816,11 +1914,12 @@ function hydrateShortlistFromHash() {
       requestId: payload.requestId || "",
       organization: payload.organization || "Client shortlist",
       title: payload.title || "Shared profiles",
+      accessMode: payload.accessMode || "standard",
       annualGrossPay: Number(payload.annualGrossPay || 0),
-      feeRate: Number(payload.feeRate || 0.005),
+      feeRate: Number(payload.feeRate ?? 0.005),
       profileIds: (payload.profiles || []).map((profile) => profile.id),
       clientSelectedProfileIds: [],
-      paymentComplete: false,
+      paymentComplete: Boolean(payload.paymentComplete || payload.accessMode === "intern"),
       redactedProfiles: payload.profiles || []
     };
   } else {
@@ -1828,7 +1927,7 @@ function hydrateShortlistFromHash() {
       ...currentShortlist,
       token: token || currentShortlist.token,
       clientSelectedProfileIds: [],
-      paymentComplete: false
+      paymentComplete: currentShortlist.accessMode === "intern"
     };
   }
 
@@ -1980,18 +2079,21 @@ document.querySelector("#generate-shortlist").addEventListener("click", async ()
     relatedRequest.pushedProfileIds = [...new Set([...(relatedRequest.pushedProfileIds || []), ...selectedProfileIds])];
   }
 
+  const accessMode = isFreeInternRequest(relatedRequest) ? "intern" : "standard";
   currentShortlist = {
     token: `sl-${Math.random().toString(16).slice(2, 8)}`,
     requestId: relatedRequest?.id || "",
+    accessMode,
     organization,
     title: document.querySelector("#shortlist-title").value,
     annualGrossPay: relatedRequest?.annualGrossPay || 0,
+    feeRate: accessMode === "intern" ? 0 : 0.005,
     profileIds: selectedProfileIds,
     clientSelectedProfileIds: [],
-    paymentComplete: false,
+    paymentComplete: accessMode === "intern",
     redactedProfiles: []
   };
-  currentShortlist.redactedProfiles = getShortlistProfiles().map(redactProfile);
+  currentShortlist.redactedProfiles = getShortlistProfiles().map((profile, index) => buildClientProfile(profile, index, accessMode));
   storeSharedShortlist();
   try {
     await saveCurrentShortlistToSupabase();

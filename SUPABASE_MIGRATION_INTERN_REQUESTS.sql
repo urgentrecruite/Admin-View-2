@@ -1,3 +1,7 @@
+-- Run this after the original setup SQL.
+-- It upgrades public client links so paid shortlists stay anonymous,
+-- while free intern shortlists can show full shared intern profiles.
+
 alter table public.profiles
 add column if not exists cv_file_name text,
 add column if not exists cv_file_path text,

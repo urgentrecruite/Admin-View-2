@@ -113,6 +113,7 @@ let currentShortlist = {
   profileIds: [],
   clientSelectedProfileIds: [],
   paymentComplete: false,
+  requestSubmitted: false,
   redactedProfiles: []
 };
 
@@ -195,6 +196,28 @@ function countWords(value) {
     .filter(Boolean).length;
 }
 
+function redactContactText(value) {
+  return String(value || "")
+    .replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, "[email hidden]")
+    .replace(/\b(?:https?:\/\/)?(?:www\.)?linkedin\.com\/[^\s,;]+/gi, "[LinkedIn hidden]")
+    .replace(/\b(?:\+?\d[\d\s().-]{7,}\d)\b/g, "[phone hidden]")
+    .split(/\n+/)
+    .filter((line) => !/^\s*(email|e-mail|phone|mobile|telephone|tel|address|linkedin|contact)\b\s*[:,-]/i.test(line))
+    .join("\n")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
+function clientSafeText(value, fallback = "Details are being prepared by the recruitment team.") {
+  return redactContactText(value) || fallback;
+}
+
+function clientSafeSkills(skills) {
+  return (Array.isArray(skills) ? skills : [])
+    .map((skill) => clientSafeText(skill, ""))
+    .filter(Boolean);
+}
+
 function formatMoney(amount) {
   const value = Number(amount) || 0;
   if (!value) return "Not provided";
@@ -208,6 +231,11 @@ function getRelatedRequestForShortlist() {
   return requests.find((request) => String(request.id) === String(currentShortlist.requestId))
     || requests.find((request) => request.organization === currentShortlist.organization)
     || null;
+}
+
+function getRequestEmail(request) {
+  const candidates = [request?.workEmail, request?.email, request?.contact].filter(Boolean);
+  return candidates.find((value) => String(value).includes("@")) || "";
 }
 
 function isFreeInternRequest(request) {
@@ -234,6 +262,27 @@ function getGrossPayBasis() {
   return Number(currentShortlist.annualGrossPay || relatedRequest?.annualGrossPay || 0);
 }
 
+function calculateShortlistFee(selectedCount, grossPay = getGrossPayBasis(), accessMode = getShortlistAccessMode()) {
+  if (accessMode === "intern") {
+    return {
+      feePerProfile: 0,
+      totalFee: 0,
+      appliedRate: 0
+    };
+  }
+
+  const count = Math.max(0, Number(selectedCount) || 0);
+  const pay = Math.max(0, Number(grossPay) || 0);
+  const appliedProfiles = Math.min(count, 5);
+  const feePerProfile = pay * 0.001;
+
+  return {
+    feePerProfile,
+    totalFee: feePerProfile * appliedProfiles,
+    appliedRate: appliedProfiles * 0.001
+  };
+}
+
 function getClientSafeSummary(profile) {
   const hasParsedContent = ["parsed", "reviewed"].includes(String(profile.parseStatus || "").toLowerCase())
     || Boolean(profile.experienceDetails || profile.certifications || profile.projects || profile.cvTextExcerpt);
@@ -242,9 +291,23 @@ function getClientSafeSummary(profile) {
     return "Professional profile summary is being prepared by the recruitment team.";
   }
 
-  return profile.experienceDetails
+  return clientSafeText(profile.experienceDetails
     || profile.cvTextExcerpt
-    || "Professional experience summary is being prepared by the recruitment team.";
+    || "Professional experience summary is being prepared by the recruitment team.",
+  "Professional experience summary is being prepared by the recruitment team.");
+}
+
+function getRedactedParsedSections(profile) {
+  return [
+    ["Experience details", profile.experienceDetails || profile.cvTextExcerpt],
+    ["Companies and roles", profile.achievements],
+    ["Certifications", profile.certifications],
+    ["Projects", profile.projects],
+    ["Education", profile.education],
+    ["Skills", Array.isArray(profile.skills) ? profile.skills.join(", ") : profile.skills]
+  ]
+    .map(([label, value]) => [label, clientSafeText(value, "")])
+    .filter(([, value]) => value);
 }
 
 function redactProfile(profile, index = 0) {
@@ -254,14 +317,16 @@ function redactProfile(profile, index = 0) {
     id: profile.id,
     safeForClient: true,
     name: `Profile ${index + 1}`,
-    role: profile.role,
-    location: profile.location,
-    experience: profile.experience,
-    skills: profile.skills,
+    role: clientSafeText(profile.role, "Candidate profile"),
+    location: clientSafeText(profile.location, "Location not provided"),
+    experience: clientSafeText(profile.experience, "Experience not provided"),
+    skills: clientSafeSkills(profile.skills),
     summary: safeSummary,
-    experienceDetails: profile.experienceDetails || safeSummary,
-    certifications: profile.certifications || "Certifications will be extracted during recruiter review.",
-    projects: profile.projects || "Projects will be extracted during recruiter review.",
+    experienceDetails: clientSafeText(profile.experienceDetails || profile.cvTextExcerpt || safeSummary, safeSummary),
+    certifications: clientSafeText(profile.certifications, "Certifications will be extracted during recruiter review."),
+    projects: clientSafeText(profile.projects, "Projects will be extracted during recruiter review."),
+    education: clientSafeText(profile.education, ""),
+    achievements: clientSafeText(profile.achievements, ""),
     notes: "Contact details are hidden until payment is confirmed."
   };
 }
@@ -271,31 +336,28 @@ function buildClientProfile(profile, index = 0, accessMode = getShortlistAccessM
     return redactProfile(profile, index);
   }
 
-  const profileSummary = profile.experienceDetails
+  const profileSummary = clientSafeText(profile.experienceDetails
     || profile.cvTextExcerpt
-    || profile.summary
-    || "Intern profile summary is being prepared by the recruitment team.";
+    || "Intern profile summary is being prepared by the recruitment team.",
+  "Intern profile summary is being prepared by the recruitment team.");
 
   return {
     id: profile.id,
     safeForClient: true,
     accessMode: "intern",
     fullProfileAvailable: true,
-    name: profile.name,
-    role: profile.role,
-    location: profile.location,
-    experience: profile.experience,
-    skills: profile.skills,
+    name: `Intern Profile ${index + 1}`,
+    role: clientSafeText(profile.role, "Intern profile"),
+    location: clientSafeText(profile.location, "Location not provided"),
+    experience: clientSafeText(profile.experience, "Experience not provided"),
+    skills: clientSafeSkills(profile.skills),
     summary: profileSummary,
-    experienceDetails: profile.experienceDetails || profile.cvTextExcerpt || profile.summary || profileSummary,
-    certifications: profile.certifications || "Certifications not provided.",
-    projects: profile.projects || "Projects not provided.",
-    education: profile.education || "",
-    achievements: profile.achievements || "",
-    contact: profile.contact || "Contact details not provided.",
-    cvFileName: profile.cvFileName || "",
-    cvFilePath: profile.cvFilePath || "",
-    notes: "Full intern profile shared for organization review."
+    experienceDetails: clientSafeText(profile.experienceDetails || profile.cvTextExcerpt || profileSummary, profileSummary),
+    certifications: clientSafeText(profile.certifications, "Certifications not provided."),
+    projects: clientSafeText(profile.projects, "Projects not provided."),
+    education: clientSafeText(profile.education, ""),
+    achievements: clientSafeText(profile.achievements, ""),
+    notes: "Full intern profile shared for organization review. Direct candidate contact details are handled by Urgent Recruite."
   };
 }
 
@@ -388,6 +450,8 @@ function mapSupabaseRequest(row) {
     id: row.id,
     organization: row.organization || "Unnamed organization",
     contact: row.contact_name || row.work_email || "No contact provided",
+    contactName: row.contact_name || "",
+    workEmail: row.work_email || "",
     role: row.job_title || "Shortlist request",
     requested: toIsoDateLabel(row.created_at),
     annualGrossPay: Number(row.annual_gross_pay || 0),
@@ -605,6 +669,8 @@ function loadFrontendSubmissions() {
       id,
       organization: submission.companyName || "Unnamed organization",
       contact: submission.contactName || submission.workEmail || "No contact provided",
+      contactName: submission.contactName || "",
+      workEmail: submission.workEmail || "",
       role: submission.jobTitle || "Shortlist request",
       requested: submission.submittedAt ? new Date(submission.submittedAt).toLocaleDateString() : "Frontend submission",
       annualGrossPay: parseMoney(submission.annualPay),
@@ -679,6 +745,7 @@ function buildSharePayload() {
     token: currentShortlist.token,
     requestId: currentShortlist.requestId || relatedRequest?.id || "",
     accessMode,
+    clientEmail: currentShortlist.clientEmail || getRequestEmail(relatedRequest),
     organization: currentShortlist.organization,
     title: currentShortlist.title,
     annualGrossPay: getGrossPayBasis(),
@@ -761,11 +828,13 @@ async function loadPublicShortlistFromSupabase(token) {
     organization: data.organization || "Client shortlist",
     title: data.title || "Shared profiles",
     accessMode: data.accessMode || "standard",
+    clientEmail: data.clientEmail || "",
     annualGrossPay: Number(data.annualGrossPay || 0),
     feeRate: Number(data.feeRate ?? 0.005),
     profileIds: (data.profiles || []).map((profile) => profile.id),
     clientSelectedProfileIds: [],
     paymentComplete: Boolean(data.paymentComplete || data.accessMode === "intern"),
+    requestSubmitted: false,
     redactedProfiles: data.profiles || []
   };
 
@@ -800,6 +869,21 @@ async function copyText(text, successMessage) {
     shareUrl.select();
     showToast("Link selected for copying");
   }
+}
+
+async function sendEmailNotification(type, payload) {
+  const response = await fetch("/api/send-email", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ type, payload })
+  });
+
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok || result.configured === false) {
+    throw new Error(result.error || "Email service is not configured.");
+  }
+
+  return result;
 }
 
 function setSection(sectionId) {
@@ -1577,49 +1661,42 @@ function renderClientPreview() {
     return;
   }
 
+  if (currentShortlist.requestSubmitted) {
+    clientProfiles.innerHTML = `
+      <article class="client-card selected">
+        <h3>Thank you.</h3>
+        <p>Thank you. Your profile request has been received. Our recruitment team will contact you shortly.</p>
+      </article>
+    `;
+    renderClientBilling();
+    return;
+  }
+
   clientProfiles.innerHTML = redactedProfiles.map((profile, index) => {
     const isSelected = selectedIds.has(String(profile.id));
     const profileInternMode = internMode || profile.accessMode === "intern";
-    const profileLabel = profileInternMode ? profile.name || `Intern Profile ${index + 1}` : `Profile ${index + 1}`;
+    const profileLabel = profileInternMode ? `Intern Profile ${index + 1}` : `Profile ${index + 1}`;
     const clientReady = profileInternMode || profile.safeForClient === true;
     const safeSummary = clientReady
-      ? profile.summary || "Professional profile summary is being prepared by the recruitment team."
+      ? clientSafeText(profile.summary, "Professional profile summary is being prepared by the recruitment team.")
       : "Professional profile summary is being prepared by the recruitment team.";
-    const safeExperience = clientReady
-      ? profile.experienceDetails || safeSummary
-      : "Experience details will be expanded after recruiter review.";
-    const safeCertifications = clientReady
-      ? profile.certifications || "To be confirmed during recruiter review."
-      : "To be confirmed during recruiter review.";
-    const safeProjects = clientReady
-      ? profile.projects || "To be confirmed during recruiter review."
-      : "To be confirmed during recruiter review.";
-    const extraInternDetails = profileInternMode ? `
-          <p><strong>Contact:</strong> ${escapeHtml(profile.contact || "Contact details not provided.")}</p>
-          ${profile.education ? `<p><strong>Education:</strong> ${escapeHtml(profile.education)}</p>` : ""}
-          ${profile.achievements ? `<p><strong>Achievements:</strong> ${escapeHtml(profile.achievements)}</p>` : ""}
-          ${profile.cvFileName ? `<p><strong>CV file:</strong> ${escapeHtml(profile.cvFileName)}</p>` : ""}
-    ` : "";
+    const redactedNote = profileInternMode
+      ? "Candidate contact details are handled by Urgent Recruite."
+      : "Contact details are hidden until payment is confirmed.";
 
     return `
-      <article class="client-card ${isSelected ? "selected" : ""}">
+      <article class="client-card ${isSelected ? "selected" : ""}" data-client-card-id="${escapeHtml(profile.id)}">
         <label class="client-select-row">
           <input type="checkbox" data-client-profile-id="${escapeHtml(profile.id)}" ${isSelected ? "checked" : ""}>
           <span>
             <strong>${escapeHtml(profileLabel)}</strong>
-            <span class="meta">${escapeHtml(profile.role)} / ${escapeHtml(profile.location)} / ${escapeHtml(profile.experience)}</span>
+            <span class="meta">${escapeHtml(clientSafeText(profile.role, "Candidate profile"))} / ${escapeHtml(clientSafeText(profile.location, "Location not provided"))} / ${escapeHtml(clientSafeText(profile.experience, "Experience not provided"))}</span>
           </span>
         </label>
         <p>${escapeHtml(safeSummary)}</p>
-        <div class="tag-list">${(profile.skills || []).map((skill) => `<span class="tag">${escapeHtml(skill)}</span>`).join("")}</div>
-        <details class="client-profile-detail">
-          <summary>${profileInternMode ? "Open full intern profile" : "Open redacted profile"}</summary>
-          <p><strong>Experience:</strong> ${escapeHtml(safeExperience)}</p>
-          <p><strong>Certifications:</strong> ${escapeHtml(safeCertifications)}</p>
-          <p><strong>Projects:</strong> ${escapeHtml(safeProjects)}</p>
-          ${extraInternDetails}
-          <p class="redacted-note">${escapeHtml(profile.notes || "Contact details are hidden until payment is confirmed.")}</p>
-        </details>
+        <div class="tag-list">${clientSafeSkills(profile.skills || []).map((skill) => `<span class="tag">${escapeHtml(skill)}</span>`).join("")}</div>
+        <button class="ghost-button small client-open-profile" type="button" data-client-open-id="${escapeHtml(profile.id)}">${profileInternMode ? "Open intern profile" : "Open redacted profile"}</button>
+        <p class="redacted-note">${escapeHtml(redactedNote)}</p>
       </article>
     `;
   }).join("");
@@ -1637,33 +1714,113 @@ function renderClientPreview() {
     });
   });
 
+  clientProfiles.querySelectorAll("[data-client-open-id]").forEach((button) => {
+    button.addEventListener("click", () => openClientProfileModal(button.dataset.clientOpenId));
+  });
+
+  clientProfiles.querySelectorAll("[data-client-card-id]").forEach((card) => {
+    card.addEventListener("click", (event) => {
+      if (event.target.closest("input, label, button")) return;
+      openClientProfileModal(card.dataset.clientCardId);
+    });
+  });
+
   renderClientBilling();
+}
+
+function getClientProfileDisplayLabel(profile, index) {
+  return (profile.accessMode === "intern" || isInternShortlist())
+    ? `Intern Profile ${index + 1}`
+    : `Profile ${index + 1}`;
+}
+
+function getClientProfileSections(profile) {
+  const skills = clientSafeSkills(profile.skills || []).join(", ");
+  return [
+    ["PROFILE SUMMARY", clientSafeText(profile.summary, "Professional profile summary is being prepared by the recruitment team.")],
+    ["EXPERIENCE", clientSafeText(profile.experience, "Experience not provided.")],
+    ["WORK EXPERIENCE", clientSafeText(profile.experienceDetails, "Work experience details will be expanded after recruiter review.")],
+    ["PROJECTS", clientSafeText(profile.projects, "Projects will be confirmed during recruiter review.")],
+    ["CERTIFICATIONS", clientSafeText(profile.certifications, "Certifications will be confirmed during recruiter review.")],
+    ["EDUCATION", clientSafeText(profile.education, "Education will be confirmed during recruiter review.")],
+    ["SKILLS", skills || "Skills will be confirmed during recruiter review."]
+  ].filter(([, value]) => value);
+}
+
+function ensureClientProfileModal() {
+  let modal = document.querySelector("#client-profile-modal");
+  if (modal) return modal;
+
+  modal = document.createElement("dialog");
+  modal.id = "client-profile-modal";
+  modal.className = "client-profile-modal";
+  modal.innerHTML = `
+    <div class="client-profile-modal-card">
+      <button class="ghost-button small client-profile-modal-close" type="button" aria-label="Close profile">Close</button>
+      <div class="client-profile-modal-body"></div>
+    </div>
+  `;
+  document.body.appendChild(modal);
+  modal.querySelector(".client-profile-modal-close").addEventListener("click", () => modal.close());
+  modal.addEventListener("click", (event) => {
+    if (event.target === modal) modal.close();
+  });
+  return modal;
+}
+
+function openClientProfileModal(profileId) {
+  const visibleProfiles = getClientVisibleProfiles();
+  const index = visibleProfiles.findIndex((profile) => String(profile.id) === String(profileId));
+  const profile = visibleProfiles[index];
+  if (!profile) return;
+
+  const modal = ensureClientProfileModal();
+  const label = getClientProfileDisplayLabel(profile, index);
+  const sections = getClientProfileSections(profile);
+  modal.querySelector(".client-profile-modal-body").innerHTML = `
+    <p class="eyebrow">Redacted candidate profile</p>
+    <h2>${escapeHtml(label)}</h2>
+    <p class="meta">${escapeHtml(clientSafeText(profile.role, "Candidate profile"))} / ${escapeHtml(clientSafeText(profile.location, "Location not provided"))}</p>
+    <div class="client-profile-modal-sections">
+      ${sections.map(([heading, value]) => `
+        <section>
+          <h3>${escapeHtml(heading)}</h3>
+          <p>${escapeHtml(value)}</p>
+        </section>
+      `).join("")}
+    </div>
+    <p class="redacted-note">Phone number, email address, LinkedIn, address, and other contact details are hidden.</p>
+  `;
+
+  if (typeof modal.showModal === "function") {
+    modal.showModal();
+  } else {
+    modal.setAttribute("open", "");
+  }
 }
 
 function renderClientBilling() {
   const selectedCount = (currentShortlist.clientSelectedProfileIds || []).length;
   const internMode = isInternShortlist();
   const grossPay = getGrossPayBasis();
-  const feeRate = internMode ? 0 : Number(currentShortlist.feeRate ?? 0.005);
-  const feePerProfile = grossPay * feeRate;
-  const totalFee = selectedCount * feePerProfile;
+  const fee = calculateShortlistFee(selectedCount, grossPay);
   const paymentNote = document.querySelector("#client-payment-note");
 
   document.querySelector("#client-selected-count").textContent = selectedCount;
   document.querySelector("#client-gross-pay").textContent = internMode ? "Free" : formatMoney(grossPay);
-  document.querySelector("#client-fee-per-profile").textContent = formatMoney(feePerProfile);
-  document.querySelector("#client-total-fee").textContent = formatMoney(totalFee);
+  document.querySelector("#client-fee-per-profile").textContent = formatMoney(fee.feePerProfile);
+  document.querySelector("#client-total-fee").textContent = formatMoney(fee.totalFee);
 
-  clientPaymentButton.disabled = selectedCount === 0;
+  clientPaymentButton.disabled = selectedCount === 0 || currentShortlist.requestSubmitted;
   clientPaymentButton.textContent = selectedCount
-    ? internMode ? "Download selected intern profiles" : currentShortlist.paymentComplete ? "Download selected profiles" : "Make payment to unlock"
+    ? currentShortlist.requestSubmitted ? "Request received" : internMode ? "Download selected intern profiles" : "Request these profiles"
     : internMode ? "Select intern profiles to download" : "Select profiles to continue";
 
-  paymentNote.textContent = internMode
+  paymentNote.textContent = currentShortlist.requestSubmitted
+    ? "Thank you. Your profile request has been received. Our recruitment team will contact you shortly."
+    : internMode
     ? "This intern shortlist is free for organizations. Select one or more intern profiles to download the shared profile details."
-    : currentShortlist.paymentComplete
-      ? "Payment is marked as received for this prototype. The selected profile download is now available."
-      : "Select one or more profiles. The fee is calculated as 0.5% of the annual gross pay per selected profile.";
+    : "Select one or more profiles. Each selected CV is 0.1% of annual gross pay, capped at 0.5% total.";
 }
 
 function getDeletedFilterValue() {
@@ -1823,15 +1980,25 @@ function downloadSelectedClientProfiles() {
   const selectedIds = (currentShortlist.clientSelectedProfileIds || []).map(String);
   const redactedById = new Map(getClientVisibleProfiles().map((profile) => [String(profile.id), profile]));
   const selectedProfiles = selectedIds.map((id) => {
-    const fullProfile = profiles.find((profile) => String(profile.id) === id);
-    if (fullProfile) return fullProfile;
-
+    const safeProfile = redactedById.get(id) || {};
     return {
-      ...redactedById.get(id),
-      contact: "Full contact details require backend payment unlock."
+      id: safeProfile.id,
+      name: "Selected profile",
+      role: clientSafeText(safeProfile.role, "Candidate profile"),
+      location: clientSafeText(safeProfile.location, "Location not provided"),
+      experience: clientSafeText(safeProfile.experience, "Experience not provided"),
+      skills: clientSafeSkills(safeProfile.skills),
+      summary: clientSafeText(safeProfile.summary, "Professional profile summary is being prepared by the recruitment team."),
+      experienceDetails: clientSafeText(safeProfile.experienceDetails, "Experience details will be expanded after recruiter review."),
+      certifications: clientSafeText(safeProfile.certifications, "To be confirmed during recruiter review."),
+      projects: clientSafeText(safeProfile.projects, "To be confirmed during recruiter review."),
+      education: clientSafeText(safeProfile.education, ""),
+      achievements: clientSafeText(safeProfile.achievements, ""),
+      contact: "Contact details are handled by Urgent Recruite."
     };
   });
 
+  const fee = calculateShortlistFee(selectedIds.length);
   const payload = {
     shortlist: {
       organization: currentShortlist.organization,
@@ -1839,7 +2006,7 @@ function downloadSelectedClientProfiles() {
       accessMode: getShortlistAccessMode(),
       paymentStatus: isInternShortlist() ? "free_intern" : "paid",
       selectedProfiles: selectedIds.length,
-      totalFee: isInternShortlist() ? 0 : selectedIds.length * getGrossPayBasis() * Number(currentShortlist.feeRate ?? 0.005)
+      totalFee: fee.totalFee
     },
     profiles: selectedProfiles
   };
@@ -1856,11 +2023,46 @@ function downloadSelectedClientProfiles() {
   showToast("Selected profiles downloaded");
 }
 
-function handleClientPaymentOrDownload() {
+function getSelectedClientProfileReferences() {
+  const selectedIds = new Set((currentShortlist.clientSelectedProfileIds || []).map(String));
+  return getClientVisibleProfiles()
+    .filter((profile) => selectedIds.has(String(profile.id)))
+    .map((profile, index) => (profile.accessMode === "intern" || isInternShortlist())
+      ? `Intern Profile ${index + 1}`
+      : `Profile ${index + 1}`);
+}
+
+async function submitClientProfileRequest() {
+  const selectedIds = (currentShortlist.clientSelectedProfileIds || []).map(String);
+  const fee = calculateShortlistFee(selectedIds.length);
+
+  await sendEmailNotification("profile-request", {
+    companyName: currentShortlist.organization,
+    clientEmail: currentShortlist.clientEmail || getRequestEmail(getRelatedRequestForShortlist()),
+    shortlistId: currentShortlist.token,
+    shortlistTitle: currentShortlist.title,
+    selectedCount: selectedIds.length,
+    grossPay: getGrossPayBasis(),
+    calculatedFee: fee.totalFee,
+    selectedProfileReferences: getSelectedClientProfileReferences()
+  });
+
+  currentShortlist.requestSubmitted = true;
+  const relatedRequest = getRelatedRequestForShortlist();
+  if (relatedRequest) {
+    relatedRequest.clientResponse = "responded";
+  }
+  renderAll();
+  showToast("Thank you. Your profile request has been received. Our recruitment team will contact you shortly.");
+}
+
+async function handleClientPaymentOrDownload() {
   if (!(currentShortlist.clientSelectedProfileIds || []).length) {
     showToast("Select at least one profile first");
     return;
   }
+
+  if (currentShortlist.requestSubmitted) return;
 
   if (isInternShortlist()) {
     const relatedRequest = getRelatedRequestForShortlist();
@@ -1871,19 +2073,11 @@ function handleClientPaymentOrDownload() {
     return;
   }
 
-  if (!currentShortlist.paymentComplete) {
-    currentShortlist.paymentComplete = true;
-    const relatedRequest = getRelatedRequestForShortlist();
-    if (relatedRequest) {
-      relatedRequest.clientResponse = "responded";
-      relatedRequest.paymentStatus = "paid";
-    }
-    renderAll();
-    showToast("Payment marked as received for testing");
-    return;
+  try {
+    await submitClientProfileRequest();
+  } catch (error) {
+    showToast(error.message || "Could not send the profile request yet. Please try again.");
   }
-
-  downloadSelectedClientProfiles();
 }
 
 function hydrateShortlistFromHash() {
@@ -1915,11 +2109,13 @@ function hydrateShortlistFromHash() {
       organization: payload.organization || "Client shortlist",
       title: payload.title || "Shared profiles",
       accessMode: payload.accessMode || "standard",
+      clientEmail: payload.clientEmail || "",
       annualGrossPay: Number(payload.annualGrossPay || 0),
       feeRate: Number(payload.feeRate ?? 0.005),
       profileIds: (payload.profiles || []).map((profile) => profile.id),
       clientSelectedProfileIds: [],
       paymentComplete: Boolean(payload.paymentComplete || payload.accessMode === "intern"),
+      requestSubmitted: Boolean(payload.requestSubmitted),
       redactedProfiles: payload.profiles || []
     };
   } else {
@@ -1927,7 +2123,8 @@ function hydrateShortlistFromHash() {
       ...currentShortlist,
       token: token || currentShortlist.token,
       clientSelectedProfileIds: [],
-      paymentComplete: currentShortlist.accessMode === "intern"
+      paymentComplete: currentShortlist.accessMode === "intern",
+      requestSubmitted: false
     };
   }
 
@@ -2084,6 +2281,7 @@ document.querySelector("#generate-shortlist").addEventListener("click", async ()
     token: `sl-${Math.random().toString(16).slice(2, 8)}`,
     requestId: relatedRequest?.id || "",
     accessMode,
+    clientEmail: getRequestEmail(relatedRequest),
     organization,
     title: document.querySelector("#shortlist-title").value,
     annualGrossPay: relatedRequest?.annualGrossPay || 0,
@@ -2095,14 +2293,27 @@ document.querySelector("#generate-shortlist").addEventListener("click", async ()
   };
   currentShortlist.redactedProfiles = getShortlistProfiles().map((profile, index) => buildClientProfile(profile, index, accessMode));
   storeSharedShortlist();
+  const clientLink = buildShareUrl();
   try {
     await saveCurrentShortlistToSupabase();
   } catch {
     showToast("Client link generated locally. Check Supabase shortlist tables.");
   }
+  try {
+    await sendEmailNotification("shortlist-link", {
+      to: currentShortlist.clientEmail,
+      companyName: currentShortlist.organization,
+      shortlistId: currentShortlist.token,
+      shortlistTitle: currentShortlist.title,
+      secureLink: clientLink,
+      accessMode
+    });
+  } catch {
+    await copyText(clientLink, "Secure link generated and copied. Add email service or client email to send automatically.");
+  }
   renderAll();
   setSection("preview");
-  showToast("Secure redacted view generated");
+  showToast(currentShortlist.clientEmail ? "Secure link sent to the client." : "Secure link generated. No client email found, so the link was copied.");
 });
 
 async function initializeApp() {

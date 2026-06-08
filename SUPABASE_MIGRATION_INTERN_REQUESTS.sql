@@ -1,6 +1,6 @@
 -- Run this after the original setup SQL.
 -- It upgrades public client links so paid shortlists stay anonymous,
--- while free intern shortlists can show full shared intern profiles.
+-- while free intern shortlists can show full non-contact intern profiles.
 
 alter table public.profiles
 add column if not exists cv_file_name text,
@@ -34,12 +34,8 @@ as $$
         when r.payment_status = 'free_intern' or s.fee_rate = 0 then 'intern'
         else 'standard'
       end as access_mode,
+      r.work_email as client_email,
       p.id as profile_id,
-      p.full_name,
-      p.email,
-      p.phone,
-      p.linkedin,
-      p.contact_details,
       p.role,
       p.location,
       p.experience,
@@ -51,8 +47,6 @@ as $$
       p.projects,
       p.education,
       p.achievements,
-      p.cv_file_name,
-      p.cv_file_path,
       row_number() over (partition by s.id order by sp.created_at, p.created_at) as profile_number
     from public.shortlists s
     left join public.shortlist_requests r on r.id = s.request_id
@@ -64,6 +58,7 @@ as $$
     jsonb_build_object(
       'token', token,
       'accessMode', access_mode,
+      'clientEmail', coalesce(client_email, ''),
       'organization', organization,
       'title', title,
       'annualGrossPay', annual_gross_pay,
@@ -77,7 +72,7 @@ as $$
             'accessMode', access_mode,
             'fullProfileAvailable', access_mode = 'intern',
             'name', case
-              when access_mode = 'intern' then coalesce(full_name, concat('Intern Profile ', profile_number))
+              when access_mode = 'intern' then concat('Intern Profile ', profile_number)
               else concat('Profile ', profile_number)
             end,
             'role', coalesce(role, 'Candidate profile'),
@@ -85,25 +80,22 @@ as $$
             'experience', coalesce(experience, 'Experience not provided'),
             'skills', coalesce(to_jsonb(skills), '[]'::jsonb),
             'summary', case
-              when access_mode = 'intern' then coalesce(experience_details, cv_text_excerpt, summary, 'Intern profile summary is being prepared by the recruitment team.')
+              when access_mode = 'intern' then coalesce(experience_details, cv_text_excerpt, 'Intern profile summary is being prepared by the recruitment team.')
               else coalesce(experience_details, cv_text_excerpt, 'Professional profile summary is being prepared by the recruitment team.')
             end,
             'experienceDetails', case
-              when access_mode = 'intern' then coalesce(experience_details, cv_text_excerpt, summary, 'Experience details will be expanded after recruiter review.')
+              when access_mode = 'intern' then coalesce(experience_details, cv_text_excerpt, 'Experience details will be expanded after recruiter review.')
               else coalesce(experience_details, cv_text_excerpt, 'Experience details will be expanded after recruiter review.')
             end,
             'certifications', coalesce(certifications, 'To be confirmed during recruiter review.'),
             'projects', coalesce(projects, 'To be confirmed during recruiter review.'),
             'education', case when access_mode = 'intern' then coalesce(education, '') else '' end,
             'achievements', case when access_mode = 'intern' then coalesce(achievements, '') else '' end,
-            'contact', case
-              when access_mode = 'intern' then coalesce(contact_details, concat_ws(' / ', email, phone, linkedin), 'Contact details not provided.')
-              else 'Contact details are hidden until payment is confirmed.'
-            end,
-            'cvFileName', case when access_mode = 'intern' then coalesce(cv_file_name, '') else '' end,
-            'cvFilePath', case when access_mode = 'intern' then coalesce(cv_file_path, '') else '' end,
+            'contact', 'Contact details are handled by Urgent Recruite.',
+            'cvFileName', '',
+            'cvFilePath', '',
             'notes', case
-              when access_mode = 'intern' then 'Full intern profile shared for organization review.'
+              when access_mode = 'intern' then 'Full intern profile shared for organization review. Direct candidate contact details are handled by Urgent Recruite.'
               else 'Contact details are hidden until payment is confirmed.'
             end
           )
@@ -114,7 +106,7 @@ as $$
     '{}'::jsonb
   )
   from ranked_profiles
-  group by shortlist_id, token, access_mode, organization, title, annual_gross_pay, fee_rate, payment_complete;
+  group by shortlist_id, token, access_mode, client_email, organization, title, annual_gross_pay, fee_rate, payment_complete;
 $$;
 
 grant execute on function public.get_public_shortlist(text) to anon;

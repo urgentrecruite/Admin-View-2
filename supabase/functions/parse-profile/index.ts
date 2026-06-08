@@ -118,6 +118,8 @@ async function parseCvWithOpenAI(fileBytes: Uint8Array, fileName: string, mimeTy
                 "You are a recruitment CV parser for Urgent Recruite.",
                 "Read the uploaded CV file itself. Do not count the candidate note, career-interest field, or recruiter notes as CV words.",
                 "Extract only professional, non-contact profile information suitable for an anonymous client shortlist.",
+                "Do not include phone numbers, email addresses, physical addresses, LinkedIn URLs, personal websites, or other direct contact details in any public summary field.",
+                "Do not include private notes written by the candidate unless they describe professional experience, projects, education, certifications, or skills.",
                 "Return summary, experienceDetails, certifications, projects, education, and achievements in clear professional English, even if the CV is written in another language.",
                 "Use concise business language. Do not invent employers, certifications, projects, or years of experience.",
                 "If a detail is missing, return an empty string for that field."

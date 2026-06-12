@@ -120,8 +120,14 @@ async function parseCvWithOpenAI(fileBytes: Uint8Array, fileName: string, mimeTy
                 "Extract only professional, non-contact profile information suitable for an anonymous client shortlist.",
                 "Do not include phone numbers, email addresses, physical addresses, LinkedIn URLs, personal websites, or other direct contact details in any public summary field.",
                 "Do not include private notes written by the candidate unless they describe professional experience, projects, education, certifications, or skills.",
-                "Return summary, experienceDetails, certifications, projects, education, and achievements in clear professional English, even if the CV is written in another language.",
-                "Use concise business language. Do not invent employers, certifications, projects, or years of experience.",
+                "Write the summary like a professional objective or profile summary, using the candidate's actual background, target field, and strengths.",
+                "For experienceDetails, extract work experience with role titles, organizations, dates when available, and the main responsibilities or achievements under each role.",
+                "For education, extract all education, degrees, institutions, and dates when available.",
+                "For certifications, extract certifications, diplomas, training, licences, and professional qualifications.",
+                "For projects, extract projects, campaigns, initiatives, administrative improvements, events, systems, or portfolio work mentioned in the CV.",
+                "For achievements, extract additional strengths, languages, tools, measurable accomplishments, and competencies that do not fit the other fields.",
+                "Return rich but readable summary, experienceDetails, certifications, projects, education, and achievements in clear professional English, even if the CV is written in another language.",
+                "Use professional business language. Do not invent employers, certifications, projects, or years of experience.",
                 "If a detail is missing, return an empty string for that field."
               ].join(" ")
             }

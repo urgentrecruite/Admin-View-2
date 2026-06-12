@@ -27,6 +27,78 @@ function money(value) {
     : "Not provided";
 }
 
+function getSiteUrl() {
+  return clean(process.env.URGENT_RECRUITE_SITE_URL || process.env.NEXT_PUBLIC_SITE_URL || "https://urgentrecruite.com").replace(/\/$/, "");
+}
+
+function getLogoUrl() {
+  return clean(process.env.URGENT_RECRUITE_LOGO_URL || `${getSiteUrl()}/assets/logo.jpeg`);
+}
+
+function escapeHtml(value) {
+  return String(value || "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+
+function textToHtml(text, hiddenUrl = "") {
+  return String(text || "")
+    .split(/\n{2,}/)
+    .map((paragraph) => paragraph.trim())
+    .filter((paragraph) => paragraph && paragraph !== hiddenUrl)
+    .map((paragraph) => `<p style="margin:0 0 16px;color:#314247;font-size:15px;line-height:1.65;">${escapeHtml(paragraph).replace(/\n/g, "<br>")}</p>`)
+    .join("");
+}
+
+function buildBrandedHtml(email) {
+  const action = email.actionUrl
+    ? `<p style="margin:22px 0 24px;"><a href="${escapeHtml(email.actionUrl)}" style="display:inline-block;padding:13px 18px;border-radius:8px;background:#1f6feb;color:#ffffff;font-weight:800;text-decoration:none;">${escapeHtml(email.actionLabel || "View profile brief")}</a></p>`
+    : "";
+
+  return `<!doctype html>
+<html>
+  <body style="margin:0;padding:0;background:#f5f7f8;font-family:Arial,Helvetica,sans-serif;">
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f5f7f8;padding:28px 12px;">
+      <tr>
+        <td align="center">
+          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:640px;background:#ffffff;border:1px solid #e2e8ea;border-radius:12px;overflow:hidden;">
+            <tr>
+              <td style="padding:24px 28px;border-bottom:1px solid #e2e8ea;background:#ffffff;">
+                <img src="${escapeHtml(getLogoUrl())}" width="170" alt="Urgent Recruite" style="display:block;max-width:170px;height:auto;">
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:30px 28px 18px;">
+                ${textToHtml(email.text, email.actionUrl)}
+                ${action}
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:22px 28px 28px;border-top:1px solid #e2e8ea;background:#fbfcfd;">
+                <p style="margin:0 0 6px;color:#102426;font-size:15px;font-weight:800;">Urgent Recruite Team</p>
+                <p style="margin:0;color:#5d6b70;font-size:13px;line-height:1.55;">The right people, exactly when you need them.</p>
+                <p style="margin:14px 0 0;color:#7a878b;font-size:12px;line-height:1.55;">This email was sent by Urgent Recruite as part of a recruitment, callback, or shortlist request workflow.</p>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>`;
+}
+
+function prepareEmailForProvider(email) {
+  const { actionUrl, actionLabel, ...providerEmail } = email;
+  return {
+    ...providerEmail,
+    html: email.html || buildBrandedHtml({ ...email, actionUrl, actionLabel })
+  };
+}
+
 function parseBody(request) {
   if (!request.body) return {};
   if (typeof request.body === "string") {
@@ -104,21 +176,11 @@ function buildEmails(type, payload = {}) {
   }
 
   if (type === "cv-submission-confirmation") {
-    return [{
-      from: SENDERS.careers,
-      to: clean(payload.email),
-      subject: "Your profile has been received",
-      text: `Hello ${name},\n\nThank you for submitting your profile. We will contact you as soon as we find an organization requesting your profile or expertise.\n\nUrgent Recruite Careers`
-    }];
+    return [];
   }
 
   if (type === "intern-application-confirmation") {
-    return [{
-      from: SENDERS.intern,
-      to: clean(payload.email),
-      subject: "Your intern profile has been received",
-      text: `Hello ${name},\n\nThank you for submitting your intern profile. Our intern placement team will review your interests, field, and CV, and we will contact you when we find an organization looking for an intern profile like yours.\n\nUrgent Recruite Interns`
-    }];
+    return [];
   }
 
   if (type === "employer-request-confirmation") {
@@ -140,7 +202,9 @@ function buildEmails(type, payload = {}) {
       from: SENDERS.recruitment,
       to: clean(payload.to || payload.clientEmail),
       subject: `Secure shortlist link for ${company}`,
-      text: `Dear ${company} Team,\n\nThank you for requesting a shortlist from Urgent Recruite.\n\nKindly note that we hold candidate profiles in high confidence. In line with our policy, candidate contact details remain hidden until you request specific profiles.\n\nPlease use the secure link below to review the redacted shortlist, view candidate experience summaries, and indicate the profiles you are interested in.\n\n${clean(payload.secureLink)}\n\nKind regards,\nUrgent Recruite Team`
+      text: `Dear ${company} Team,\n\nThank you for requesting a shortlist from Urgent Recruite.\n\nKindly note that we hold candidate profiles in high confidence. In line with our policy, candidate contact details remain hidden until you request specific profiles.\n\nPlease use the secure profile brief link to review the redacted shortlist, view candidate experience summaries, and indicate the profiles you are interested in.\n\n${clean(payload.secureLink)}\n\nKind regards,\nUrgent Recruite Team`,
+      actionUrl: clean(payload.secureLink),
+      actionLabel: "View profile brief"
     }];
   }
 
@@ -208,7 +272,7 @@ module.exports = async function handler(request, response) {
   try {
     const results = [];
     for (const email of emails) {
-      results.push(await sendResendEmail(apiKey, email));
+      results.push(await sendResendEmail(apiKey, prepareEmailForProvider(email)));
     }
 
     response.status(200).json({ ok: true, sent: results.length });

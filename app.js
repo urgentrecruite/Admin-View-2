@@ -218,6 +218,88 @@ function clientSafeSkills(skills) {
     .filter(Boolean);
 }
 
+function isWeakClientText(value) {
+  const text = String(value || "").trim().toLowerCase();
+  return !text
+    || text.includes("being prepared")
+    || text.includes("to be confirmed")
+    || text.includes("will be extracted")
+    || text.includes("will be expanded")
+    || text.includes("not provided");
+}
+
+function professionalSourceText(profile) {
+  return [
+    profile.summary,
+    profile.experienceDetails,
+    profile.cvTextExcerpt,
+    profile.projects,
+    profile.certifications,
+    profile.education,
+    profile.achievements,
+    Array.isArray(profile.skills) ? profile.skills.join(", ") : profile.skills
+  ]
+    .map((value) => redactContactText(value))
+    .filter((value) => value && !isWeakClientText(value))
+    .join("\n\n");
+}
+
+function isLikelyHeading(line) {
+  const normalized = String(line || "").trim();
+  return normalized.length > 2
+    && normalized.length < 70
+    && /^[A-Z0-9 &/().'-]+$/.test(normalized)
+    && /[A-Z]/.test(normalized);
+}
+
+function extractSectionFromText(text, headings) {
+  const lines = String(text || "")
+    .split(/\n+/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const normalizedHeadings = headings.map((heading) => heading.toLowerCase());
+  const startIndex = lines.findIndex((line) => {
+    const normalized = line.replace(/[:\-]+$/, "").toLowerCase();
+    return normalizedHeadings.some((heading) => normalized === heading || normalized.includes(heading));
+  });
+
+  if (startIndex < 0) return "";
+
+  const output = [];
+  for (let index = startIndex + 1; index < lines.length; index += 1) {
+    if (output.length && isLikelyHeading(lines[index])) break;
+    output.push(lines[index]);
+  }
+
+  return clientSafeText(output.join("\n"), "");
+}
+
+function firstUsefulSentences(text, maximumSentences = 3) {
+  const source = clientSafeText(text, "");
+  if (!source) return "";
+  const sentences = source
+    .replace(/\n+/g, " ")
+    .split(/(?<=[.!?])\s+/)
+    .map((sentence) => sentence.trim())
+    .filter(Boolean)
+    .slice(0, maximumSentences);
+  return sentences.join(" ");
+}
+
+function redactedDetail(profile, directValue, headings, fallback, sentenceLimit = 4) {
+  const direct = clientSafeText(directValue, "");
+  if (direct && !isWeakClientText(direct)) return direct;
+
+  const source = professionalSourceText(profile);
+  const extracted = extractSectionFromText(source, headings);
+  if (extracted && !isWeakClientText(extracted)) return extracted;
+
+  const excerpt = firstUsefulSentences(source, sentenceLimit);
+  if (excerpt && !isWeakClientText(excerpt)) return excerpt;
+
+  return fallback;
+}
+
 function formatMoney(amount) {
   const value = Number(amount) || 0;
   if (!value) return "Not provided";
@@ -284,17 +366,13 @@ function calculateShortlistFee(selectedCount, grossPay = getGrossPayBasis(), acc
 }
 
 function getClientSafeSummary(profile) {
-  const hasParsedContent = ["parsed", "reviewed"].includes(String(profile.parseStatus || "").toLowerCase())
-    || Boolean(profile.experienceDetails || profile.certifications || profile.projects || profile.cvTextExcerpt);
-
-  if (!hasParsedContent) {
-    return "Professional profile summary is being prepared by the recruitment team.";
-  }
-
-  return clientSafeText(profile.experienceDetails
-    || profile.cvTextExcerpt
-    || "Professional experience summary is being prepared by the recruitment team.",
-  "Professional experience summary is being prepared by the recruitment team.");
+  return redactedDetail(
+    profile,
+    profile.summary,
+    ["objective", "profile summary", "professional summary", "summary"],
+    "Professional profile summary is available after CV parsing in the admin.",
+    3
+  );
 }
 
 function getRedactedParsedSections(profile) {
@@ -322,11 +400,11 @@ function redactProfile(profile, index = 0) {
     experience: clientSafeText(profile.experience, "Experience not provided"),
     skills: clientSafeSkills(profile.skills),
     summary: safeSummary,
-    experienceDetails: clientSafeText(profile.experienceDetails || profile.cvTextExcerpt || safeSummary, safeSummary),
-    certifications: clientSafeText(profile.certifications, "Certifications will be extracted during recruiter review."),
-    projects: clientSafeText(profile.projects, "Projects will be extracted during recruiter review."),
-    education: clientSafeText(profile.education, ""),
-    achievements: clientSafeText(profile.achievements, ""),
+    experienceDetails: redactedDetail(profile, profile.experienceDetails, ["work experience", "experience", "employment history"], safeSummary, 6),
+    certifications: redactedDetail(profile, profile.certifications, ["certifications", "certificates", "training", "qualifications"], "", 4),
+    projects: redactedDetail(profile, profile.projects, ["projects", "campaigns", "initiatives", "portfolio"], "", 4),
+    education: redactedDetail(profile, profile.education, ["education", "academic background", "qualifications"], "", 5),
+    achievements: redactedDetail(profile, profile.achievements, ["skills and competencies", "competencies", "additional strengths", "languages", "achievements"], "", 5),
     notes: "Contact details are hidden until payment is confirmed."
   };
 }
@@ -336,10 +414,13 @@ function buildClientProfile(profile, index = 0, accessMode = getShortlistAccessM
     return redactProfile(profile, index);
   }
 
-  const profileSummary = clientSafeText(profile.experienceDetails
-    || profile.cvTextExcerpt
-    || "Intern profile summary is being prepared by the recruitment team.",
-  "Intern profile summary is being prepared by the recruitment team.");
+  const profileSummary = redactedDetail(
+    profile,
+    profile.summary,
+    ["objective", "profile summary", "professional summary", "summary"],
+    "Intern profile summary is available after CV parsing in the admin.",
+    3
+  );
 
   return {
     id: profile.id,
@@ -352,11 +433,11 @@ function buildClientProfile(profile, index = 0, accessMode = getShortlistAccessM
     experience: clientSafeText(profile.experience, "Experience not provided"),
     skills: clientSafeSkills(profile.skills),
     summary: profileSummary,
-    experienceDetails: clientSafeText(profile.experienceDetails || profile.cvTextExcerpt || profileSummary, profileSummary),
-    certifications: clientSafeText(profile.certifications, "Certifications not provided."),
-    projects: clientSafeText(profile.projects, "Projects not provided."),
-    education: clientSafeText(profile.education, ""),
-    achievements: clientSafeText(profile.achievements, ""),
+    experienceDetails: redactedDetail(profile, profile.experienceDetails, ["work experience", "experience", "employment history"], profileSummary, 6),
+    certifications: redactedDetail(profile, profile.certifications, ["certifications", "certificates", "training", "qualifications"], "", 4),
+    projects: redactedDetail(profile, profile.projects, ["projects", "campaigns", "initiatives", "portfolio"], "", 4),
+    education: redactedDetail(profile, profile.education, ["education", "academic background", "qualifications"], "", 5),
+    achievements: redactedDetail(profile, profile.achievements, ["skills and competencies", "competencies", "additional strengths", "languages", "achievements"], "", 5),
     notes: "Full intern profile shared for organization review. Direct candidate contact details are handled by Urgent Recruite."
   };
 }
@@ -1678,8 +1759,8 @@ function renderClientPreview() {
     const profileLabel = profileInternMode ? `Intern Profile ${index + 1}` : `Profile ${index + 1}`;
     const clientReady = profileInternMode || profile.safeForClient === true;
     const safeSummary = clientReady
-      ? clientSafeText(profile.summary, "Professional profile summary is being prepared by the recruitment team.")
-      : "Professional profile summary is being prepared by the recruitment team.";
+      ? redactedDetail(profile, profile.summary, ["objective", "profile summary", "professional summary", "summary"], "CV parsing is required before a complete redacted profile brief can be shown.", 3)
+      : "CV parsing is required before a complete redacted profile brief can be shown.";
     const redactedNote = profileInternMode
       ? "Candidate contact details are handled by Urgent Recruite."
       : "Contact details are hidden until payment is confirmed.";
@@ -1736,15 +1817,20 @@ function getClientProfileDisplayLabel(profile, index) {
 
 function getClientProfileSections(profile) {
   const skills = clientSafeSkills(profile.skills || []).join(", ");
-  return [
-    ["PROFILE SUMMARY", clientSafeText(profile.summary, "Professional profile summary is being prepared by the recruitment team.")],
-    ["EXPERIENCE", clientSafeText(profile.experience, "Experience not provided.")],
-    ["WORK EXPERIENCE", clientSafeText(profile.experienceDetails, "Work experience details will be expanded after recruiter review.")],
-    ["PROJECTS", clientSafeText(profile.projects, "Projects will be confirmed during recruiter review.")],
-    ["CERTIFICATIONS", clientSafeText(profile.certifications, "Certifications will be confirmed during recruiter review.")],
-    ["EDUCATION", clientSafeText(profile.education, "Education will be confirmed during recruiter review.")],
-    ["SKILLS", skills || "Skills will be confirmed during recruiter review."]
-  ].filter(([, value]) => value);
+  const source = professionalSourceText(profile);
+  const sections = [
+    ["PROFILE SUMMARY", redactedDetail(profile, profile.summary, ["objective", "profile summary", "professional summary", "summary"], firstUsefulSentences(source, 3), 3)],
+    ["EXPERIENCE", redactedDetail(profile, profile.experience, ["experience overview", "experience"], firstUsefulSentences(profile.experienceDetails || source, 2), 2)],
+    ["WORK EXPERIENCE", redactedDetail(profile, profile.experienceDetails, ["work experience", "employment history", "professional experience"], firstUsefulSentences(source, 6), 6)],
+    ["PROJECTS", redactedDetail(profile, profile.projects, ["projects", "campaigns", "initiatives", "portfolio"], "", 4)],
+    ["CERTIFICATIONS", redactedDetail(profile, profile.certifications, ["certifications", "certificates", "training", "qualifications"], "", 4)],
+    ["EDUCATION", redactedDetail(profile, profile.education, ["education", "academic background"], "", 5)],
+    ["SKILLS", skills || redactedDetail(profile, profile.achievements, ["skills and competencies", "skills", "competencies", "technology and tools", "languages", "additional strengths"], "", 5)]
+  ];
+
+  return sections
+    .map(([heading, value]) => [heading, clientSafeText(value, "")])
+    .filter(([, value]) => value && !isWeakClientText(value));
 }
 
 function ensureClientProfileModal() {
@@ -1777,17 +1863,25 @@ function openClientProfileModal(profileId) {
   const modal = ensureClientProfileModal();
   const label = getClientProfileDisplayLabel(profile, index);
   const sections = getClientProfileSections(profile);
+  const sectionMarkup = sections.length
+    ? sections.map(([heading, value]) => `
+        <section>
+          <h3>${escapeHtml(heading)}</h3>
+          <p>${escapeHtml(value)}</p>
+        </section>
+      `).join("")
+    : `
+        <section>
+          <h3>PROFILE BRIEF</h3>
+          <p>The CV needs to be parsed in the admin before a complete redacted profile brief can be shown here.</p>
+        </section>
+      `;
   modal.querySelector(".client-profile-modal-body").innerHTML = `
     <p class="eyebrow">Redacted candidate profile</p>
     <h2>${escapeHtml(label)}</h2>
     <p class="meta">${escapeHtml(clientSafeText(profile.role, "Candidate profile"))} / ${escapeHtml(clientSafeText(profile.location, "Location not provided"))}</p>
     <div class="client-profile-modal-sections">
-      ${sections.map(([heading, value]) => `
-        <section>
-          <h3>${escapeHtml(heading)}</h3>
-          <p>${escapeHtml(value)}</p>
-        </section>
-      `).join("")}
+      ${sectionMarkup}
     </div>
     <p class="redacted-note">Phone number, email address, LinkedIn, address, and other contact details are hidden.</p>
   `;
@@ -1988,8 +2082,8 @@ function downloadSelectedClientProfiles() {
       location: clientSafeText(safeProfile.location, "Location not provided"),
       experience: clientSafeText(safeProfile.experience, "Experience not provided"),
       skills: clientSafeSkills(safeProfile.skills),
-      summary: clientSafeText(safeProfile.summary, "Professional profile summary is being prepared by the recruitment team."),
-      experienceDetails: clientSafeText(safeProfile.experienceDetails, "Experience details will be expanded after recruiter review."),
+      summary: redactedDetail(safeProfile, safeProfile.summary, ["objective", "profile summary", "professional summary", "summary"], "CV parsing is required before a complete redacted profile brief can be shown.", 3),
+      experienceDetails: redactedDetail(safeProfile, safeProfile.experienceDetails, ["work experience", "experience", "employment history"], "CV parsing is required before detailed work experience can be shown.", 6),
       certifications: clientSafeText(safeProfile.certifications, "To be confirmed during recruiter review."),
       projects: clientSafeText(safeProfile.projects, "To be confirmed during recruiter review."),
       education: clientSafeText(safeProfile.education, ""),

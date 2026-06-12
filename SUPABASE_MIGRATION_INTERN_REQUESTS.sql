@@ -80,17 +80,17 @@ as $$
             'experience', coalesce(experience, 'Experience not provided'),
             'skills', coalesce(to_jsonb(skills), '[]'::jsonb),
             'summary', case
-              when access_mode = 'intern' then coalesce(experience_details, cv_text_excerpt, 'Intern profile summary is being prepared by the recruitment team.')
-              else coalesce(experience_details, cv_text_excerpt, 'Professional profile summary is being prepared by the recruitment team.')
+              when access_mode = 'intern' then coalesce(experience_details, cv_text_excerpt, 'CV parsing is required before a complete redacted profile brief can be shown.')
+              else coalesce(experience_details, cv_text_excerpt, 'CV parsing is required before a complete redacted profile brief can be shown.')
             end,
             'experienceDetails', case
-              when access_mode = 'intern' then coalesce(experience_details, cv_text_excerpt, 'Experience details will be expanded after recruiter review.')
-              else coalesce(experience_details, cv_text_excerpt, 'Experience details will be expanded after recruiter review.')
+              when access_mode = 'intern' then coalesce(experience_details, cv_text_excerpt, 'CV parsing is required before detailed work experience can be shown.')
+              else coalesce(experience_details, cv_text_excerpt, 'CV parsing is required before detailed work experience can be shown.')
             end,
             'certifications', coalesce(certifications, 'To be confirmed during recruiter review.'),
             'projects', coalesce(projects, 'To be confirmed during recruiter review.'),
-            'education', case when access_mode = 'intern' then coalesce(education, '') else '' end,
-            'achievements', case when access_mode = 'intern' then coalesce(achievements, '') else '' end,
+            'education', coalesce(education, ''),
+            'achievements', coalesce(achievements, ''),
             'contact', 'Contact details are handled by Urgent Recruite.',
             'cvFileName', '',
             'cvFilePath', '',

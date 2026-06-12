@@ -13,7 +13,11 @@ add column if not exists certifications text,
 add column if not exists projects text,
 add column if not exists education text,
 add column if not exists achievements text,
+add column if not exists client_brief text,
 add column if not exists cv_text_excerpt text;
+
+alter table public.deleted_profiles
+add column if not exists client_brief text;
 
 create or replace function public.get_public_shortlist(public_token text)
 returns jsonb
@@ -41,6 +45,7 @@ as $$
       p.experience,
       p.skills,
       p.summary,
+      p.client_brief,
       p.cv_text_excerpt,
       p.experience_details,
       p.certifications,
@@ -79,9 +84,10 @@ as $$
             'location', coalesce(location, 'Location not provided'),
             'experience', coalesce(experience, 'Experience not provided'),
             'skills', coalesce(to_jsonb(skills), '[]'::jsonb),
+            'clientBrief', coalesce(client_brief, experience_details, cv_text_excerpt, 'CV parsing is required before a complete redacted candidate profile brief can be shown.'),
             'summary', case
-              when access_mode = 'intern' then coalesce(experience_details, cv_text_excerpt, 'CV parsing is required before a complete redacted profile brief can be shown.')
-              else coalesce(experience_details, cv_text_excerpt, 'CV parsing is required before a complete redacted profile brief can be shown.')
+              when access_mode = 'intern' then coalesce(client_brief, experience_details, cv_text_excerpt, 'CV parsing is required before a complete redacted candidate profile brief can be shown.')
+              else coalesce(client_brief, experience_details, cv_text_excerpt, 'CV parsing is required before a complete redacted candidate profile brief can be shown.')
             end,
             'experienceDetails', case
               when access_mode = 'intern' then coalesce(experience_details, cv_text_excerpt, 'CV parsing is required before detailed work experience can be shown.')

@@ -303,9 +303,72 @@ h2 {
 }
 
 .request-card {
+  display: block;
+}
+
+.request-card-summary {
   display: grid;
   grid-template-columns: 1fr auto;
   gap: 10px;
+  align-items: start;
+  cursor: pointer;
+  list-style: none;
+}
+
+.request-card-summary::-webkit-details-marker {
+  display: none;
+}
+
+.request-card-summary::after {
+  content: "Open details";
+  grid-column: 1 / -1;
+  justify-self: start;
+  color: var(--accent-strong);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.request-card[open] .request-card-summary::after {
+  content: "Close details";
+}
+
+.request-card-details {
+  display: grid;
+  gap: 12px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--line);
+}
+
+.request-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.request-detail-grid div,
+.request-detail-text {
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.request-detail-grid span,
+.request-detail-text h4 {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.request-detail-grid strong,
+.request-detail-text p {
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.55;
+  white-space: pre-wrap;
 }
 
 .request-card h3,
@@ -954,7 +1017,8 @@ body.public-client-view .client-preview {
   .split-layout,
   .client-profile-grid,
   .client-billing-grid,
-  .client-payment-row {
+  .client-payment-row,
+  .request-detail-grid {
     grid-template-columns: 1fr;
   }
 

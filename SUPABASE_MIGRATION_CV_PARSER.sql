@@ -8,6 +8,7 @@ add column if not exists certifications text,
 add column if not exists projects text,
 add column if not exists education text,
 add column if not exists achievements text,
+add column if not exists client_brief text,
 add column if not exists cv_text_excerpt text;
 
 do $$
@@ -30,6 +31,7 @@ add column if not exists certifications text,
 add column if not exists projects text,
 add column if not exists education text,
 add column if not exists achievements text,
+add column if not exists client_brief text,
 add column if not exists cv_text_excerpt text;
 
 do $$
@@ -60,6 +62,7 @@ as $$
       p.location,
       p.experience,
       p.skills,
+      p.client_brief,
       p.cv_text_excerpt,
       p.experience_details,
       p.certifications,
@@ -87,8 +90,9 @@ as $$
             'location', coalesce(location, 'Location not provided'),
             'experience', coalesce(experience, 'Experience not provided'),
             'skills', coalesce(to_jsonb(skills), '[]'::jsonb),
-            'summary', coalesce(experience_details, cv_text_excerpt, 'Professional profile summary is being prepared by the recruitment team.'),
-            'experienceDetails', coalesce(experience_details, cv_text_excerpt, 'Experience details will be expanded after recruiter review.'),
+            'clientBrief', coalesce(client_brief, experience_details, cv_text_excerpt, 'CV parsing is required before a complete redacted candidate profile brief can be shown.'),
+            'summary', coalesce(client_brief, experience_details, cv_text_excerpt, 'CV parsing is required before a complete redacted candidate profile brief can be shown.'),
+            'experienceDetails', coalesce(experience_details, cv_text_excerpt, 'CV parsing is required before detailed work experience can be shown.'),
             'certifications', coalesce(certifications, 'To be confirmed during recruiter review.'),
             'projects', coalesce(projects, 'To be confirmed during recruiter review.'),
             'notes', 'Contact details are hidden until payment is confirmed.'

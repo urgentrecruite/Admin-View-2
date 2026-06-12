@@ -14,6 +14,7 @@ const parserSchema = {
     location: { type: "string" },
     experience: { type: "string" },
     summary: { type: "string" },
+    clientBrief: { type: "string" },
     experienceDetails: { type: "string" },
     certifications: { type: "string" },
     projects: { type: "string" },
@@ -36,6 +37,7 @@ const parserSchema = {
     "location",
     "experience",
     "summary",
+    "clientBrief",
     "experienceDetails",
     "certifications",
     "projects",
@@ -126,6 +128,8 @@ async function parseCvWithOpenAI(fileBytes: Uint8Array, fileName: string, mimeTy
                 "For certifications, extract certifications, diplomas, training, licences, and professional qualifications.",
                 "For projects, extract projects, campaigns, initiatives, administrative improvements, events, systems, or portfolio work mentioned in the CV.",
                 "For achievements, extract additional strengths, languages, tools, measurable accomplishments, and competencies that do not fit the other fields.",
+                "For clientBrief, write one polished client-facing candidate profile brief in professional English, under 300 words, based only on the CV. Cover the candidate's experience in an orderly way, academic and certification summary, and projects or achievements when available.",
+                "The clientBrief must not include the candidate's full name, phone number, email address, LinkedIn URL, physical address, personal website, or any direct contact detail.",
                 "Return rich but readable summary, experienceDetails, certifications, projects, education, and achievements in clear professional English, even if the CV is written in another language.",
                 "Use professional business language. Do not invent employers, certifications, projects, or years of experience.",
                 "If a detail is missing, return an empty string for that field."
@@ -267,6 +271,7 @@ Deno.serve(async (req) => {
 
     const parsedWordCount = Math.max(0, Number(parsed.wordCount || 0));
     const cvExcerpt = [
+      parsed.clientBrief,
       parsed.summary,
       parsed.experienceDetails,
       parsed.certifications,
@@ -282,6 +287,7 @@ Deno.serve(async (req) => {
       experience: parsed.experience || profile.experience,
       skills: Array.isArray(parsed.skills) ? parsed.skills.filter(Boolean).slice(0, 12) : profile.skills,
       summary: parsed.summary || profile.summary,
+      client_brief: parsed.clientBrief || parsed.summary || "",
       word_count: parsedWordCount,
       parse_status: parsedWordCount < minimumWords ? "rejected" : "parsed",
       parsed_at: new Date().toISOString(),
@@ -306,6 +312,7 @@ Deno.serve(async (req) => {
         experience: parsedFields.experience,
         source: profile.source === "intent" ? "intent" : "cv",
         summary: parsedFields.summary,
+        client_brief: parsedFields.client_brief,
         word_count: parsedWordCount,
         contact_details: profile.contact_details || "",
         notes: profile.notes || "",

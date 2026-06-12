@@ -225,11 +225,14 @@ function isWeakClientText(value) {
     || text.includes("to be confirmed")
     || text.includes("will be extracted")
     || text.includes("will be expanded")
+    || text.includes("cv parsing is required")
+    || text.includes("no profile summary")
     || text.includes("not provided");
 }
 
-function professionalSourceText(profile) {
+function professionalSourceText(profile = {}) {
   return [
+    profile.clientBrief,
     profile.summary,
     profile.experienceDetails,
     profile.cvTextExcerpt,
@@ -300,6 +303,59 @@ function redactedDetail(profile, directValue, headings, fallback, sentenceLimit 
   return fallback;
 }
 
+function limitWords(value, maximumWords = 300) {
+  const words = String(value || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .split(" ")
+    .filter(Boolean);
+
+  if (words.length <= maximumWords) return words.join(" ");
+  return `${words.slice(0, maximumWords).join(" ")}...`;
+}
+
+function briefLine(label, value) {
+  const cleanValue = clientSafeText(value, "");
+  if (!cleanValue || isWeakClientText(cleanValue)) return "";
+  return `${label}: ${cleanValue}`;
+}
+
+function getClientCandidateBrief(profile) {
+  const direct = clientSafeText(profile?.clientBrief, "");
+  if (direct && !isWeakClientText(direct)) return limitWords(direct, 300);
+
+  const experienceBrief = redactedDetail(
+    profile,
+    profile?.experienceDetails,
+    ["work experience", "employment history", "professional experience", "experience"],
+    "",
+    8
+  );
+  const summaryBrief = redactedDetail(
+    profile,
+    profile?.summary,
+    ["objective", "profile summary", "professional summary", "summary"],
+    "",
+    4
+  );
+
+  const brief = [
+    briefLine("Professional profile", summaryBrief),
+    briefLine("Experience brief", experienceBrief || profile?.experience),
+    briefLine("Academic and certification summary", [profile?.education, profile?.certifications].filter(Boolean).join("\n")),
+    briefLine("Projects and achievements", [profile?.projects, profile?.achievements].filter(Boolean).join("\n")),
+    briefLine("Core skills", clientSafeSkills(profile?.skills || []).join(", "))
+  ].filter(Boolean).join("\n\n");
+
+  if (brief) return limitWords(brief, 300);
+
+  const source = professionalSourceText(profile);
+  const sourceBrief = firstUsefulSentences(source, 8);
+  if (sourceBrief && !isWeakClientText(sourceBrief)) return limitWords(sourceBrief, 300);
+
+  return "CV parsing is required before a complete redacted candidate profile brief can be shown.";
+}
+
 function formatMoney(amount) {
   const value = Number(amount) || 0;
   if (!value) return "Not provided";
@@ -366,13 +422,7 @@ function calculateShortlistFee(selectedCount, grossPay = getGrossPayBasis(), acc
 }
 
 function getClientSafeSummary(profile) {
-  return redactedDetail(
-    profile,
-    profile.summary,
-    ["objective", "profile summary", "professional summary", "summary"],
-    "Professional profile summary is available after CV parsing in the admin.",
-    3
-  );
+  return getClientCandidateBrief(profile);
 }
 
 function getRedactedParsedSections(profile) {
@@ -399,6 +449,7 @@ function redactProfile(profile, index = 0) {
     location: clientSafeText(profile.location, "Location not provided"),
     experience: clientSafeText(profile.experience, "Experience not provided"),
     skills: clientSafeSkills(profile.skills),
+    clientBrief: safeSummary,
     summary: safeSummary,
     experienceDetails: redactedDetail(profile, profile.experienceDetails, ["work experience", "experience", "employment history"], safeSummary, 6),
     certifications: redactedDetail(profile, profile.certifications, ["certifications", "certificates", "training", "qualifications"], "", 4),
@@ -432,6 +483,7 @@ function buildClientProfile(profile, index = 0, accessMode = getShortlistAccessM
     location: clientSafeText(profile.location, "Location not provided"),
     experience: clientSafeText(profile.experience, "Experience not provided"),
     skills: clientSafeSkills(profile.skills),
+    clientBrief: profileSummary,
     summary: profileSummary,
     experienceDetails: redactedDetail(profile, profile.experienceDetails, ["work experience", "experience", "employment history"], profileSummary, 6),
     certifications: redactedDetail(profile, profile.certifications, ["certifications", "certificates", "training", "qualifications"], "", 4),
@@ -508,6 +560,7 @@ function mapSupabaseProfile(row) {
     source: row.source === "intent" ? "intent" : "cv",
     submittedAt: toIsoDateLabel(row.created_at),
     summary: row.summary || "No profile summary provided yet.",
+    clientBrief: row.client_brief || "",
     contact: row.contact_details || [row.email, row.phone, row.linkedin].filter(Boolean).join(" / ") || "No contact details provided",
     notes: row.notes || (row.cv_file_name ? `Uploaded file: ${row.cv_file_name}` : "Saved in Supabase"),
     cvFilePath: row.cv_file_path || "",
@@ -560,6 +613,7 @@ function mapDeletedProfile(row) {
     experience: row.experience || "Experience not provided",
     source: row.source === "intent" ? "Intern" : "CV submit",
     summary: row.summary || "No profile summary provided.",
+    clientBrief: row.client_brief || "",
     contact: row.contact_details || [row.email, row.phone, row.linkedin].filter(Boolean).join(" / ") || "No contact details provided",
     notes: row.notes || "",
     reason: row.deletion_reason || "Deleted from admin",
@@ -589,6 +643,7 @@ function profileToSupabaseRow(profile) {
     skills: Array.isArray(profile.skills) ? profile.skills : [],
     source: profile.source === "intent" ? "intent" : "cv",
     summary: profile.summary || "",
+    client_brief: profile.clientBrief || "",
     contact_details: profile.contact || "",
     email: contactParts.find((part) => part.includes("@")) || "",
     phone: contactParts.find((part) => part.startsWith("+")) || "",
@@ -737,6 +792,7 @@ function loadFrontendSubmissions() {
       source: submission.source === "intent" ? "intent" : "cv",
       submittedAt: submission.submittedAt ? new Date(submission.submittedAt).toLocaleDateString() : "Frontend submission",
       summary: submission.summary || "No profile summary provided yet.",
+      clientBrief: submission.clientBrief || submission.client_brief || "",
       contact: [submission.email, submission.phone, submission.linkedin].filter(Boolean).join(" / ") || "No contact details provided",
       notes: submission.cvFile ? `Uploaded file: ${submission.cvFile}` : "Submitted from landing page"
     });
@@ -781,6 +837,7 @@ function loadFrontendSubmissions() {
       experience: submission.experience || "Experience not provided",
       source: submission.source === "intent" ? "Intern" : "CV submit",
       summary: submission.summary || "No profile summary provided.",
+      clientBrief: submission.clientBrief || submission.client_brief || "",
       contact: submission.contact_details || "No contact details provided",
       notes: submission.notes || "",
       reason: submission.deletion_reason || "Less than 200 written profile words",
@@ -985,28 +1042,74 @@ function renderMetrics() {
   shareUrl.value = buildShareUrl();
 }
 
+function requestText(value, fallback = "Not provided") {
+  const cleanValue = String(value ?? "").trim();
+  return cleanValue || fallback;
+}
+
+function renderRequestDetailItem(label, value) {
+  return `
+    <div>
+      <span>${escapeHtml(label)}</span>
+      <strong>${escapeHtml(requestText(value))}</strong>
+    </div>
+  `;
+}
+
+function renderRequestLongDetail(label, value) {
+  const cleanValue = requestText(value, "");
+  if (!cleanValue) return "";
+  return `
+    <section class="request-detail-text">
+      <h4>${escapeHtml(label)}</h4>
+      <p>${escapeHtml(cleanValue)}</p>
+    </section>
+  `;
+}
+
+function renderRequestCard(request) {
+  const status = getRequestStatus(request);
+  const pushedCount = request.pushedProfileIds?.length || 0;
+  const requestType = isFreeInternRequest(request) ? "Free intern request" : "Paid shortlist request";
+  const detailBlocks = [
+    renderRequestLongDetail("Job description", request.jobDescription),
+    renderRequestLongDetail("Job specification", request.jobSpecification),
+    renderRequestLongDetail("Generated advert / brief", request.generatedBrief),
+    renderRequestLongDetail("Uploaded JD / document", request.jobDocument)
+  ].join("");
+
+  return `
+    <details class="request-card request-card-expandable">
+      <summary class="request-card-summary">
+        <div>
+          <h3>${escapeHtml(request.organization)}</h3>
+          <div class="meta">${escapeHtml(request.role)} / ${escapeHtml(request.contact)}<br>Requested ${escapeHtml(request.requested)}<br>${escapeHtml(getRequestActivityText(request))}</div>
+        </div>
+        <span class="status-pill">${escapeHtml(status)}</span>
+      </summary>
+      <div class="request-card-details">
+        <div class="request-detail-grid">
+          ${renderRequestDetailItem("Request type", requestType)}
+          ${renderRequestDetailItem("Contact name", request.contactName || request.contact)}
+          ${renderRequestDetailItem("Work email", request.workEmail)}
+          ${renderRequestDetailItem("Annual gross pay", formatMoney(request.annualGrossPay))}
+          ${renderRequestDetailItem("Profiles pushed", pushedCount)}
+          ${renderRequestDetailItem("Links shared", request.linkSharedCount || 0)}
+          ${renderRequestDetailItem("Payment status", request.paymentStatus)}
+          ${renderRequestDetailItem("Workflow state", request.workflowState || "open")}
+        </div>
+        ${detailBlocks || `<p class="meta">No additional request brief has been supplied yet.</p>`}
+      </div>
+    </details>
+  `;
+}
+
 function renderRequests() {
   const dashboardRequests = document.querySelector("#dashboard-requests");
   const requestsTable = document.querySelector("#requests-table");
 
-  dashboardRequests.innerHTML = requests.map((request) => `
-    <article class="request-card">
-      <div>
-        <h3>${escapeHtml(request.organization)}</h3>
-        <div class="meta">${escapeHtml(request.role)} / ${escapeHtml(request.contact)}<br>Requested ${escapeHtml(request.requested)}<br>${escapeHtml(getRequestActivityText(request))}</div>
-      </div>
-      <span class="status-pill">${escapeHtml(getRequestStatus(request))}</span>
-    </article>
-  `).join("");
-
-  requestsTable.innerHTML = requests.map((request) => `
-    <article class="table-row">
-      <strong>${escapeHtml(request.organization)}</strong>
-      <span>${escapeHtml(request.role)}</span>
-      <span class="meta">${escapeHtml(request.contact)}<br>${escapeHtml(getRequestActivityText(request))}</span>
-      <span class="status-pill">${escapeHtml(getRequestStatus(request))}</span>
-    </article>
-  `).join("");
+  dashboardRequests.innerHTML = requests.map(renderRequestCard).join("");
+  requestsTable.innerHTML = requests.map(renderRequestCard).join("");
 }
 
 function renderStatusSummary() {
@@ -1079,6 +1182,7 @@ async function moveProfileToDeleted(profileId, reason = "Deleted from admin") {
     experience: profile.experience,
     source: profile.source === "intent" ? "Intern" : "CV submit",
     summary: profile.summary,
+    clientBrief: profile.clientBrief || "",
     contact: profile.contact,
     notes: profile.notes,
     reason,
@@ -1109,6 +1213,7 @@ async function moveProfileToDeleted(profileId, reason = "Deleted from admin") {
       experience: profile.experience,
       source: profile.source === "intent" ? "intent" : "cv",
       summary: profile.summary,
+      client_brief: profile.clientBrief || "",
       word_count: deletedProfile.wordCount,
       contact_details: profile.contact,
       notes: profile.notes,
@@ -1236,7 +1341,7 @@ function renderProfiles() {
         </div>
         <div class="profile-actions compact">
           <button class="ghost-button small profile-open" type="button" data-profile-id="${profile.id}">Open</button>
-          <button class="ghost-button small profile-parse" type="button" data-profile-id="${profile.id}" ${profile.cvFilePath ? "" : "disabled"}>Parse CV</button>
+          <button class="ghost-button small profile-parse" type="button" data-profile-id="${profile.id}" ${profile.cvFilePath ? "" : "disabled"}>AI brief</button>
           <button class="danger-button small profile-delete" type="button" data-profile-id="${profile.id}">Delete</button>
         </div>
       </div>
@@ -1430,6 +1535,7 @@ async function normalizeUploadedFileProfile(file, index) {
     summary: excerpt
       ? `Uploaded text profile excerpt: ${excerpt}`
       : "Profile file uploaded from admin. Review the CV, then update the summary when backend parsing is connected.",
+    clientBrief: "",
     contact: "Contact details are inside the uploaded file",
     notes: `Uploaded file: ${file.name} (${formatFileSize(file.size)})`,
     cvFileName: file.name,
@@ -1453,6 +1559,7 @@ function normalizeUploadedProfile(profile, index) {
     source: profile.source === "intent" ? "intent" : "cv",
     submittedAt: profile.submittedAt || new Date().toLocaleDateString(),
     summary: profile.summary || profile.notes || "No profile summary provided yet.",
+    clientBrief: profile.clientBrief || profile.client_brief || "",
     contact: profile.contact || [profile.email, profile.phone, profile.linkedin].filter(Boolean).join(" / ") || "No contact details provided",
     notes: profile.notes || "Uploaded from admin",
     cvFileName: profile.cvFileName || profile.cv_file_name || "",
@@ -1580,6 +1687,7 @@ function renderProfileSummary() {
   }
 
   const duplicateIds = getDuplicateIds();
+  const clientBrief = getClientCandidateBrief(profile);
   const parsedDetailBlocks = [
     ["Experience details", profile.experienceDetails],
     ["Certifications", profile.certifications],
@@ -1592,7 +1700,7 @@ function renderProfileSummary() {
     <p class="eyebrow">AI English summary</p>
     <h3>${escapeHtml(profile.name)}</h3>
     <p class="meta">${escapeHtml(profile.role)} / ${escapeHtml(profile.location)} / ${escapeHtml(profile.experience)}</p>
-    <p>${escapeHtml(profile.summary)}</p>
+    <p>${escapeHtml(clientBrief)}</p>
     <div class="summary-grid">
       <span>Source</span><strong>${profile.source === "intent" ? "Intern" : "CV submit"}</strong>
       <span>Duplicate</span><strong>${duplicateIds.has(profile.id) ? "Yes" : "No"}</strong>
@@ -1616,7 +1724,7 @@ function renderProfileSummary() {
     <p class="meta">${escapeHtml(profile.notes)}</p>
     <div class="summary-actions">
       <button class="primary-button small" type="button" id="summary-open-cv">${profile.cvFilePath ? "Open CV file" : "Open profile summary"}</button>
-      <button class="ghost-button small" type="button" id="summary-parse-cv" ${profile.cvFilePath ? "" : "disabled"}>Parse CV</button>
+      <button class="ghost-button small" type="button" id="summary-parse-cv" ${profile.cvFilePath ? "" : "disabled"}>Generate AI brief</button>
     </div>
   `;
 
@@ -1759,8 +1867,8 @@ function renderClientPreview() {
     const profileLabel = profileInternMode ? `Intern Profile ${index + 1}` : `Profile ${index + 1}`;
     const clientReady = profileInternMode || profile.safeForClient === true;
     const safeSummary = clientReady
-      ? redactedDetail(profile, profile.summary, ["objective", "profile summary", "professional summary", "summary"], "CV parsing is required before a complete redacted profile brief can be shown.", 3)
-      : "CV parsing is required before a complete redacted profile brief can be shown.";
+      ? getClientCandidateBrief(profile)
+      : "CV parsing is required before a complete redacted candidate profile brief can be shown.";
     const redactedNote = profileInternMode
       ? "Candidate contact details are handled by Urgent Recruite."
       : "Contact details are hidden until payment is confirmed.";
@@ -1818,8 +1926,9 @@ function getClientProfileDisplayLabel(profile, index) {
 function getClientProfileSections(profile) {
   const skills = clientSafeSkills(profile.skills || []).join(", ");
   const source = professionalSourceText(profile);
+  const clientBrief = getClientCandidateBrief(profile);
   const sections = [
-    ["PROFILE SUMMARY", redactedDetail(profile, profile.summary, ["objective", "profile summary", "professional summary", "summary"], firstUsefulSentences(source, 3), 3)],
+    ["CLIENT CANDIDATE PROFILE BRIEF", clientBrief],
     ["EXPERIENCE", redactedDetail(profile, profile.experience, ["experience overview", "experience"], firstUsefulSentences(profile.experienceDetails || source, 2), 2)],
     ["WORK EXPERIENCE", redactedDetail(profile, profile.experienceDetails, ["work experience", "employment history", "professional experience"], firstUsefulSentences(source, 6), 6)],
     ["PROJECTS", redactedDetail(profile, profile.projects, ["projects", "campaigns", "initiatives", "portfolio"], "", 4)],
@@ -2082,7 +2191,8 @@ function downloadSelectedClientProfiles() {
       location: clientSafeText(safeProfile.location, "Location not provided"),
       experience: clientSafeText(safeProfile.experience, "Experience not provided"),
       skills: clientSafeSkills(safeProfile.skills),
-      summary: redactedDetail(safeProfile, safeProfile.summary, ["objective", "profile summary", "professional summary", "summary"], "CV parsing is required before a complete redacted profile brief can be shown.", 3),
+      clientBrief: getClientCandidateBrief(safeProfile),
+      summary: getClientCandidateBrief(safeProfile),
       experienceDetails: redactedDetail(safeProfile, safeProfile.experienceDetails, ["work experience", "experience", "employment history"], "CV parsing is required before detailed work experience can be shown.", 6),
       certifications: clientSafeText(safeProfile.certifications, "To be confirmed during recruiter review."),
       projects: clientSafeText(safeProfile.projects, "To be confirmed during recruiter review."),

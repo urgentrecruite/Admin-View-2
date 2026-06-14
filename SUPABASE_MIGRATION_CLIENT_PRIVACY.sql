@@ -80,10 +80,10 @@ as $$
             'location', coalesce(location, 'Location not provided'),
             'experience', coalesce(experience, 'Experience not provided'),
             'skills', coalesce(to_jsonb(skills), '[]'::jsonb),
-            'clientBrief', coalesce(client_brief, experience_details, cv_text_excerpt, 'CV parsing is required before a complete redacted candidate profile brief can be shown.'),
+            'clientBrief', coalesce(nullif(client_brief, ''), 'Candidate profile brief is awaiting CV parsing by the recruitment team.'),
             'summary', case
-              when access_mode = 'intern' then coalesce(client_brief, experience_details, cv_text_excerpt, 'CV parsing is required before a complete redacted candidate profile brief can be shown.')
-              else coalesce(client_brief, experience_details, cv_text_excerpt, 'CV parsing is required before a complete redacted candidate profile brief can be shown.')
+              when access_mode = 'intern' then coalesce(nullif(client_brief, ''), 'Candidate profile brief is awaiting CV parsing by the recruitment team.')
+              else coalesce(nullif(client_brief, ''), 'Candidate profile brief is awaiting CV parsing by the recruitment team.')
             end,
             'experienceDetails', case
               when access_mode = 'intern' then coalesce(experience_details, cv_text_excerpt, 'CV parsing is required before detailed work experience can be shown.')

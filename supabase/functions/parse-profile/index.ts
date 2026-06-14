@@ -93,7 +93,30 @@ function extractOutputText(response: any) {
   return "";
 }
 
-async function parseCvWithOpenAI(fileBytes: Uint8Array, fileName: string, mimeType: string, metadata: Record<string, unknown>) {
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function sanitizeClientBrief(value: unknown, candidateName: unknown) {
+  let safeValue = String(value || "")
+    .replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, "")
+    .replace(/\b(?:https?:\/\/|www\.)[^\s,;]+/gi, "")
+    .replace(/\b(?:\+?\d[\d\s().-]{7,}\d)\b/g, "")
+    .split(/\n+/)
+    .filter((line) => !/^\s*(email|e-mail|phone|mobile|telephone|tel|address|linkedin|contact|website)\b\s*[:,-]/i.test(line))
+    .join("\n")
+    .replace(/[ \t]{2,}/g, " ")
+    .trim();
+
+  const fullName = String(candidateName || "").trim();
+  if (fullName) {
+    safeValue = safeValue.replace(new RegExp(escapeRegExp(fullName), "gi"), "the candidate");
+  }
+
+  return safeValue.split(/\s+/).filter(Boolean).slice(0, 300).join(" ");
+}
+
+async function parseCvWithOpenAI(fileBytes: Uint8Array, fileName: string, mimeType: string) {
   const apiKey = Deno.env.get("OPENAI_API_KEY");
   if (!apiKey) {
     throw new Error("OPENAI_API_KEY is not configured in Supabase secrets.");
@@ -119,16 +142,17 @@ async function parseCvWithOpenAI(fileBytes: Uint8Array, fileName: string, mimeTy
               text: [
                 "You are a recruitment CV parser for Urgent Recruite.",
                 "Read the uploaded CV file itself. Do not count the candidate note, career-interest field, or recruiter notes as CV words.",
+                "The uploaded CV file is the sole source for every extracted professional detail. Do not use landing-page form fields, candidate notes, career interests, or submitted metadata to create the summary or client brief.",
                 "Extract only professional, non-contact profile information suitable for an anonymous client shortlist.",
                 "Do not include phone numbers, email addresses, physical addresses, LinkedIn URLs, personal websites, or other direct contact details in any public summary field.",
                 "Do not include private notes written by the candidate unless they describe professional experience, projects, education, certifications, or skills.",
-                "Write the summary like a professional objective or profile summary, using the candidate's actual background, target field, and strengths.",
+                "Write summary as a clear English CV summary for the admin, translating faithfully into English when the CV is in another language.",
                 "For experienceDetails, extract work experience with role titles, organizations, dates when available, and the main responsibilities or achievements under each role.",
                 "For education, extract all education, degrees, institutions, and dates when available.",
                 "For certifications, extract certifications, diplomas, training, licences, and professional qualifications.",
                 "For projects, extract projects, campaigns, initiatives, administrative improvements, events, systems, or portfolio work mentioned in the CV.",
                 "For achievements, extract additional strengths, languages, tools, measurable accomplishments, and competencies that do not fit the other fields.",
-                "For clientBrief, write one polished client-facing candidate profile brief in professional English, under 300 words, based only on the CV. Cover the candidate's experience in an orderly way, academic and certification summary, and projects or achievements when available.",
+                "For clientBrief, write one polished client-facing candidate profile brief in professional English, under 300 words, based only on the uploaded CV file. Use one coherent narrative of two to four short paragraphs. Cover experience in an orderly way, academic and certification background, core skills, and projects or achievements when available.",
                 "The clientBrief must not include the candidate's full name, phone number, email address, LinkedIn URL, physical address, personal website, or any direct contact detail.",
                 "Return rich but readable summary, experienceDetails, certifications, projects, education, and achievements in clear professional English, even if the CV is written in another language.",
                 "Use professional business language. Do not invent employers, certifications, projects, or years of experience.",
@@ -147,7 +171,7 @@ async function parseCvWithOpenAI(fileBytes: Uint8Array, fileName: string, mimeTy
             },
             {
               type: "input_text",
-              text: `Candidate metadata already supplied by the form: ${JSON.stringify(metadata)}. Return the parsed CV as structured JSON.`
+              text: "Use only the attached CV or resume as the factual source. Return the parsed CV as structured JSON."
             }
           ]
         }
@@ -259,19 +283,13 @@ Deno.serve(async (req) => {
     const parsed = await parseCvWithOpenAI(
       bytes,
       fileName,
-      inferMimeType(fileName, fileBlob.type),
-      {
-        submittedName: profile.full_name,
-        submittedRole: profile.role,
-        submittedLocation: profile.location,
-        submittedExperience: profile.experience,
-        source: profile.source
-      }
+      inferMimeType(fileName, fileBlob.type)
     );
 
     const parsedWordCount = Math.max(0, Number(parsed.wordCount || 0));
+    const safeClientBrief = sanitizeClientBrief(parsed.clientBrief || parsed.summary, parsed.fullName || profile.full_name);
     const cvExcerpt = [
-      parsed.clientBrief,
+      safeClientBrief,
       parsed.summary,
       parsed.experienceDetails,
       parsed.certifications,
@@ -286,8 +304,8 @@ Deno.serve(async (req) => {
       location: parsed.location || profile.location,
       experience: parsed.experience || profile.experience,
       skills: Array.isArray(parsed.skills) ? parsed.skills.filter(Boolean).slice(0, 12) : profile.skills,
-      summary: parsed.summary || profile.summary,
-      client_brief: parsed.clientBrief || parsed.summary || "",
+      summary: parsed.summary || parsed.clientBrief || "",
+      client_brief: safeClientBrief,
       word_count: parsedWordCount,
       parse_status: parsedWordCount < minimumWords ? "rejected" : "parsed",
       parsed_at: new Date().toISOString(),

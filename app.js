@@ -212,6 +212,21 @@ function clientSafeText(value, fallback = "Details are being prepared by the rec
   return redactContactText(value) || fallback;
 }
 
+function escapeRegExp(value) {
+  return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function clientSafeProfileText(profile, value, fallback = "") {
+  let safeValue = clientSafeText(value, "");
+  const candidateName = String(profile?.name || profile?.fullName || "").trim();
+
+  if (candidateName && !/^((intern )?profile)\s+\d+$/i.test(candidateName)) {
+    safeValue = safeValue.replace(new RegExp(escapeRegExp(candidateName), "gi"), "the candidate");
+  }
+
+  return safeValue || fallback;
+}
+
 function clientSafeSkills(skills) {
   return (Array.isArray(skills) ? skills : [])
     .map((skill) => clientSafeText(skill, ""))
@@ -314,46 +329,10 @@ function limitWords(value, maximumWords = 300) {
   return `${words.slice(0, maximumWords).join(" ")}...`;
 }
 
-function briefLine(label, value) {
-  const cleanValue = clientSafeText(value, "");
-  if (!cleanValue || isWeakClientText(cleanValue)) return "";
-  return `${label}: ${cleanValue}`;
-}
-
 function getClientCandidateBrief(profile) {
-  const direct = clientSafeText(profile?.clientBrief, "");
+  const direct = clientSafeProfileText(profile, profile?.clientBrief, "");
   if (direct && !isWeakClientText(direct)) return limitWords(direct, 300);
-
-  const experienceBrief = redactedDetail(
-    profile,
-    profile?.experienceDetails,
-    ["work experience", "employment history", "professional experience", "experience"],
-    "",
-    8
-  );
-  const summaryBrief = redactedDetail(
-    profile,
-    profile?.summary,
-    ["objective", "profile summary", "professional summary", "summary"],
-    "",
-    4
-  );
-
-  const brief = [
-    briefLine("Professional profile", summaryBrief),
-    briefLine("Experience brief", experienceBrief || profile?.experience),
-    briefLine("Academic and certification summary", [profile?.education, profile?.certifications].filter(Boolean).join("\n")),
-    briefLine("Projects and achievements", [profile?.projects, profile?.achievements].filter(Boolean).join("\n")),
-    briefLine("Core skills", clientSafeSkills(profile?.skills || []).join(", "))
-  ].filter(Boolean).join("\n\n");
-
-  if (brief) return limitWords(brief, 300);
-
-  const source = professionalSourceText(profile);
-  const sourceBrief = firstUsefulSentences(source, 8);
-  if (sourceBrief && !isWeakClientText(sourceBrief)) return limitWords(sourceBrief, 300);
-
-  return "CV parsing is required before a complete redacted candidate profile brief can be shown.";
+  return "Candidate profile brief is awaiting CV parsing by the recruitment team.";
 }
 
 function formatMoney(amount) {
@@ -987,7 +966,10 @@ function getStoredShortlist(token) {
 function buildShareUrl() {
   const payload = buildSharePayload();
   const encoded = encodeSharePayload(payload);
-  return `${window.location.href.split("#")[0]}#shortlist=${encodeURIComponent(payload.token)}&payload=${encoded}`;
+  const configuredUrl = window.URGENT_RECRUITE_SUPABASE?.clientViewUrl || "https://admin.urgentrecruite.com/";
+  const clientViewUrl = new URL(configuredUrl, window.location.href);
+  clientViewUrl.hash = `shortlist=${encodeURIComponent(payload.token)}&payload=${encoded}`;
+  return clientViewUrl.toString();
 }
 
 function escapeHtml(value) {
@@ -1140,6 +1122,136 @@ function renderStatusSummary() {
     `).join("");
 }
 
+let activeCvPreviewUrl = "";
+
+function loadExternalScript(source, globalName) {
+  if (window[globalName]) return Promise.resolve(window[globalName]);
+
+  return new Promise((resolve, reject) => {
+    const existing = document.querySelector(`script[data-library="${globalName}"]`);
+    if (existing) {
+      existing.addEventListener("load", () => resolve(window[globalName]), { once: true });
+      existing.addEventListener("error", () => reject(new Error(`Could not load ${globalName}.`)), { once: true });
+      return;
+    }
+
+    const script = document.createElement("script");
+    script.src = source;
+    script.async = true;
+    script.dataset.library = globalName;
+    script.addEventListener("load", () => resolve(window[globalName]), { once: true });
+    script.addEventListener("error", () => reject(new Error(`Could not load ${globalName}.`)), { once: true });
+    document.head.appendChild(script);
+  });
+}
+
+function sanitizeDocumentPreview(html) {
+  const documentPreview = new DOMParser().parseFromString(String(html || ""), "text/html");
+  documentPreview.querySelectorAll("script, style, iframe, object, embed, form, input, button").forEach((node) => node.remove());
+  documentPreview.querySelectorAll("*").forEach((node) => {
+    Array.from(node.attributes).forEach((attribute) => {
+      const name = attribute.name.toLowerCase();
+      const value = attribute.value.trim().toLowerCase();
+      if (name.startsWith("on") || name === "style" || (name === "href" && value.startsWith("javascript:"))) {
+        node.removeAttribute(attribute.name);
+      }
+    });
+  });
+  return documentPreview.body.innerHTML;
+}
+
+function cleanupCvPreview() {
+  if (activeCvPreviewUrl) {
+    URL.revokeObjectURL(activeCvPreviewUrl);
+    activeCvPreviewUrl = "";
+  }
+}
+
+function ensureCvPreviewModal() {
+  let modal = document.querySelector("#cv-preview-modal");
+  if (modal) return modal;
+
+  modal = document.createElement("dialog");
+  modal.id = "cv-preview-modal";
+  modal.className = "cv-preview-modal";
+  modal.innerHTML = `
+    <div class="cv-preview-card">
+      <header class="cv-preview-header">
+        <div>
+          <p class="eyebrow">Private CV preview</p>
+          <h2 class="cv-preview-title">Candidate CV</h2>
+        </div>
+        <div class="profile-actions compact">
+          <button class="ghost-button small cv-preview-download" type="button">Download</button>
+          <button class="ghost-button small cv-preview-close" type="button">Close</button>
+        </div>
+      </header>
+      <div class="cv-preview-body"><p class="meta">Preparing preview...</p></div>
+    </div>
+  `;
+  document.body.appendChild(modal);
+
+  modal.querySelector(".cv-preview-close").addEventListener("click", () => modal.close());
+  modal.querySelector(".cv-preview-download").addEventListener("click", () => {
+    const blob = modal._cvBlob;
+    const fileName = modal._cvFileName || "candidate-cv";
+    if (!blob) return;
+    const downloadUrl = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = downloadUrl;
+    link.download = fileName;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(downloadUrl), 1000);
+  });
+  modal.addEventListener("click", (event) => {
+    if (event.target === modal) modal.close();
+  });
+  modal.addEventListener("close", cleanupCvPreview);
+  return modal;
+}
+
+async function renderCvPreview(blob, fileName) {
+  cleanupCvPreview();
+  const modal = ensureCvPreviewModal();
+  const previewBody = modal.querySelector(".cv-preview-body");
+  const extension = String(fileName || "").split(".").pop().toLowerCase();
+  modal._cvBlob = blob;
+  modal._cvFileName = fileName;
+  modal.querySelector(".cv-preview-title").textContent = fileName || "Candidate CV";
+  previewBody.innerHTML = `<p class="meta">Preparing preview...</p>`;
+
+  if (typeof modal.showModal === "function" && !modal.open) modal.showModal();
+
+  if (extension === "pdf" || blob.type === "application/pdf") {
+    const pdfBlob = blob.type === "application/pdf" ? blob : new Blob([await blob.arrayBuffer()], { type: "application/pdf" });
+    activeCvPreviewUrl = URL.createObjectURL(pdfBlob);
+    previewBody.innerHTML = `<iframe class="cv-preview-frame" title="CV document preview" src="${escapeHtml(activeCvPreviewUrl)}"></iframe>`;
+    return;
+  }
+
+  if (extension === "docx") {
+    try {
+      await loadExternalScript("https://cdn.jsdelivr.net/npm/mammoth@1.8.0/mammoth.browser.min.js", "mammoth");
+      const result = await window.mammoth.convertToHtml({ arrayBuffer: await blob.arrayBuffer() });
+      previewBody.innerHTML = `<article class="cv-document-preview">${sanitizeDocumentPreview(result.value)}</article>`;
+    } catch (error) {
+      previewBody.innerHTML = `<p class="parser-error">This Word document could not be previewed securely. You can still download it.</p>`;
+    }
+    return;
+  }
+
+  if (["txt", "rtf"].includes(extension) || blob.type.startsWith("text/")) {
+    const textPreview = await blob.text();
+    previewBody.innerHTML = `<pre class="cv-text-preview"></pre>`;
+    previewBody.querySelector("pre").textContent = textPreview;
+    return;
+  }
+
+  previewBody.innerHTML = `<p class="meta">Preview is not available for this older Word format. Use Download to open the file locally.</p>`;
+}
+
 async function openCvForProfile(profileId) {
   const profile = profiles.find((item) => String(item.id) === String(profileId));
   if (!profile) return;
@@ -1160,14 +1272,20 @@ async function openCvForProfile(profileId) {
 
   const { data, error } = await client.storage
     .from("candidate-cvs")
-    .createSignedUrl(profile.cvFilePath, 300);
+    .createSignedUrl(profile.cvFilePath, 900);
 
   if (error || !data?.signedUrl) {
     showToast("Could not open CV file. Check storage permissions.");
     return;
   }
 
-  window.open(data.signedUrl, "_blank", "noopener");
+  try {
+    const response = await fetch(data.signedUrl);
+    if (!response.ok) throw new Error("CV download failed.");
+    await renderCvPreview(await response.blob(), profile.cvFileName || "candidate-cv");
+  } catch {
+    showToast("Could not preview CV file. Check storage permissions or download the file.");
+  }
 }
 
 async function moveProfileToDeleted(profileId, reason = "Deleted from admin") {
@@ -1256,6 +1374,44 @@ async function moveProfileToDeleted(profileId, reason = "Deleted from admin") {
   showToast("Profile moved to deleted bucket");
 }
 
+async function invokeProfileParser(profileId) {
+  const config = window.URGENT_RECRUITE_SUPABASE || {};
+  if (!config.url || !config.publishableKey || !supabaseSession?.access_token) {
+    throw new Error("Supabase parser configuration or admin session is missing.");
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 120000);
+
+  try {
+    const response = await fetch(`${config.url.replace(/\/$/, "")}/functions/v1/parse-profile`, {
+      method: "POST",
+      headers: {
+        apikey: config.publishableKey,
+        Authorization: `Bearer ${supabaseSession.access_token}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ profileId }),
+      signal: controller.signal
+    });
+    const result = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      if (response.status === 404) {
+        throw new Error("CV parser service is not deployed in Supabase.");
+      }
+      throw new Error(result.error || `CV parser request failed (${response.status}).`);
+    }
+
+    return result;
+  } catch (error) {
+    if (error?.name === "AbortError") throw new Error("CV parser timed out. Please try again.");
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 async function parseProfileCv(profileId) {
   const profile = profiles.find((item) => String(item.id) === String(profileId));
   if (!profile) return false;
@@ -1276,16 +1432,15 @@ async function parseProfileCv(profileId) {
   renderProfileSummary();
   showToast(`Parsing CV for ${profile.name}...`);
 
-  const { data, error } = await client.functions.invoke("parse-profile", {
-    body: { profileId: profile.id }
-  });
-
-  if (error) {
+  let data;
+  try {
+    data = await invokeProfileParser(profile.id);
+  } catch (error) {
     profile.parseStatus = "failed";
     profile.parserError = error.message || "CV parsing failed.";
     renderProfiles();
     renderProfileSummary();
-    showToast("CV parser failed. Check Edge Function deployment and secrets.");
+    showToast(profile.parserError);
     return false;
   }
 
@@ -1341,7 +1496,7 @@ function renderProfiles() {
         </div>
         <div class="profile-actions compact">
           <button class="ghost-button small profile-open" type="button" data-profile-id="${profile.id}">Open</button>
-          <button class="ghost-button small profile-parse" type="button" data-profile-id="${profile.id}" ${profile.cvFilePath ? "" : "disabled"}>AI brief</button>
+          <button class="ghost-button small profile-parse" type="button" data-profile-id="${profile.id}" ${profile.cvFilePath ? "" : "disabled"}>Parse CV</button>
           <button class="danger-button small profile-delete" type="button" data-profile-id="${profile.id}">Delete</button>
         </div>
       </div>
@@ -1687,7 +1842,12 @@ function renderProfileSummary() {
   }
 
   const duplicateIds = getDuplicateIds();
-  const clientBrief = getClientCandidateBrief(profile);
+  const hasEnglishCvSummary = String(profile.parseStatus || "").toLowerCase() === "parsed"
+    && profile.summary
+    && !isWeakClientText(profile.summary);
+  const adminCvSummary = hasEnglishCvSummary
+    ? profile.summary
+    : "Parse the attached CV to generate an English summary from the submitted file.";
   const parsedDetailBlocks = [
     ["Experience details", profile.experienceDetails],
     ["Certifications", profile.certifications],
@@ -1697,10 +1857,10 @@ function renderProfileSummary() {
   ].filter(([, value]) => value);
 
   summary.innerHTML = `
-    <p class="eyebrow">AI English summary</p>
+    <p class="eyebrow">CV summary (English)</p>
     <h3>${escapeHtml(profile.name)}</h3>
     <p class="meta">${escapeHtml(profile.role)} / ${escapeHtml(profile.location)} / ${escapeHtml(profile.experience)}</p>
-    <p>${escapeHtml(clientBrief)}</p>
+    <p>${escapeHtml(adminCvSummary)}</p>
     <div class="summary-grid">
       <span>Source</span><strong>${profile.source === "intent" ? "Intern" : "CV submit"}</strong>
       <span>Duplicate</span><strong>${duplicateIds.has(profile.id) ? "Yes" : "No"}</strong>
@@ -1724,7 +1884,7 @@ function renderProfileSummary() {
     <p class="meta">${escapeHtml(profile.notes)}</p>
     <div class="summary-actions">
       <button class="primary-button small" type="button" id="summary-open-cv">${profile.cvFilePath ? "Open CV file" : "Open profile summary"}</button>
-      <button class="ghost-button small" type="button" id="summary-parse-cv" ${profile.cvFilePath ? "" : "disabled"}>Generate AI brief</button>
+      <button class="ghost-button small" type="button" id="summary-parse-cv" ${profile.cvFilePath ? "" : "disabled"}>Parse CV</button>
     </div>
   `;
 
@@ -1882,9 +2042,9 @@ function renderClientPreview() {
             <span class="meta">${escapeHtml(clientSafeText(profile.role, "Candidate profile"))} / ${escapeHtml(clientSafeText(profile.location, "Location not provided"))} / ${escapeHtml(clientSafeText(profile.experience, "Experience not provided"))}</span>
           </span>
         </label>
-        <p>${escapeHtml(safeSummary)}</p>
+        <p>${escapeHtml(limitWords(safeSummary, 70))}</p>
         <div class="tag-list">${clientSafeSkills(profile.skills || []).map((skill) => `<span class="tag">${escapeHtml(skill)}</span>`).join("")}</div>
-        <button class="ghost-button small client-open-profile" type="button" data-client-open-id="${escapeHtml(profile.id)}">${profileInternMode ? "Open intern profile" : "Open redacted profile"}</button>
+        <button class="ghost-button small client-open-profile" type="button" data-client-open-id="${escapeHtml(profile.id)}">View candidate brief</button>
         <p class="redacted-note">${escapeHtml(redactedNote)}</p>
       </article>
     `;
@@ -1923,25 +2083,6 @@ function getClientProfileDisplayLabel(profile, index) {
     : `Profile ${index + 1}`;
 }
 
-function getClientProfileSections(profile) {
-  const skills = clientSafeSkills(profile.skills || []).join(", ");
-  const source = professionalSourceText(profile);
-  const clientBrief = getClientCandidateBrief(profile);
-  const sections = [
-    ["CLIENT CANDIDATE PROFILE BRIEF", clientBrief],
-    ["EXPERIENCE", redactedDetail(profile, profile.experience, ["experience overview", "experience"], firstUsefulSentences(profile.experienceDetails || source, 2), 2)],
-    ["WORK EXPERIENCE", redactedDetail(profile, profile.experienceDetails, ["work experience", "employment history", "professional experience"], firstUsefulSentences(source, 6), 6)],
-    ["PROJECTS", redactedDetail(profile, profile.projects, ["projects", "campaigns", "initiatives", "portfolio"], "", 4)],
-    ["CERTIFICATIONS", redactedDetail(profile, profile.certifications, ["certifications", "certificates", "training", "qualifications"], "", 4)],
-    ["EDUCATION", redactedDetail(profile, profile.education, ["education", "academic background"], "", 5)],
-    ["SKILLS", skills || redactedDetail(profile, profile.achievements, ["skills and competencies", "skills", "competencies", "technology and tools", "languages", "additional strengths"], "", 5)]
-  ];
-
-  return sections
-    .map(([heading, value]) => [heading, clientSafeText(value, "")])
-    .filter(([, value]) => value && !isWeakClientText(value));
-}
-
 function ensureClientProfileModal() {
   let modal = document.querySelector("#client-profile-modal");
   if (modal) return modal;
@@ -1971,26 +2112,16 @@ function openClientProfileModal(profileId) {
 
   const modal = ensureClientProfileModal();
   const label = getClientProfileDisplayLabel(profile, index);
-  const sections = getClientProfileSections(profile);
-  const sectionMarkup = sections.length
-    ? sections.map(([heading, value]) => `
-        <section>
-          <h3>${escapeHtml(heading)}</h3>
-          <p>${escapeHtml(value)}</p>
-        </section>
-      `).join("")
-    : `
-        <section>
-          <h3>PROFILE BRIEF</h3>
-          <p>The CV needs to be parsed in the admin before a complete redacted profile brief can be shown here.</p>
-        </section>
-      `;
+  const clientBrief = getClientCandidateBrief(profile);
   modal.querySelector(".client-profile-modal-body").innerHTML = `
     <p class="eyebrow">Redacted candidate profile</p>
     <h2>${escapeHtml(label)}</h2>
     <p class="meta">${escapeHtml(clientSafeText(profile.role, "Candidate profile"))} / ${escapeHtml(clientSafeText(profile.location, "Location not provided"))}</p>
     <div class="client-profile-modal-sections">
-      ${sectionMarkup}
+      <section>
+        <h3>CANDIDATE PROFILE BRIEF</h3>
+        <p>${escapeHtml(clientBrief)}</p>
+      </section>
     </div>
     <p class="redacted-note">Phone number, email address, LinkedIn, address, and other contact details are hidden.</p>
   `;
